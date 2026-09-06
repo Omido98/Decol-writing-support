@@ -42,8 +42,7 @@ Safety notes:
 - Release tasks are delegated to the `release-manager` subagent, which
   follows the `release-process` skill.
 - Pushing to a branch or tag never modifies main. Git keeps every version.
-- Old releases can be deleted by the user at any time (the repo is a
-  single-commit clean slate starting at v1.0.0).
+- Old releases can be deleted by the user at any time.
 - Releases are always drafts until the user explicitly publishes them, so a
   tag push can never ship a release to users by itself.
 
