@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "decol-writing-support"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "ego-tree",
  "futures-util",
