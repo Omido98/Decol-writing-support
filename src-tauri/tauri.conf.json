@@ -40,7 +40,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5Q0RERjY4RTY3NTA3RTMKUldUakIzWG1hTi9OR2RzTFp2UkgzU1R4amZoa2JlbmpaYS9lSzhZajg2VVlyeE5sNHlzNGFia08K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVDMEFGMzE1NEY4NDlDMUUKUldRZW5JUlBGZk1LN0Y0aXB0NlQxWGJPUE5YdXQ1UUx2S0R0b0hCd25tbzl1UGFSVTNJaFBCdmUK",
       "endpoints": [
         "https://github.com/Omido98/Decol-writing-support/releases/latest/download/latest.json"
       ],
