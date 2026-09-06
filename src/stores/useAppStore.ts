@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type TabId = "application" | "chat" | "profile";
+export type TabId = "chat";
 
 interface AppState {
   activeTab: TabId;
@@ -8,6 +8,6 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>((set) => ({
-  activeTab: "application",
+  activeTab: "chat",
   setActiveTab: (tab) => set({ activeTab: tab }),
 }));
