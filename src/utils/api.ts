@@ -2,6 +2,7 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import type { ApiConfig } from "@/stores/chatStore";
 import type { ChatMessage } from "@/stores/chatStore";
 import type { ProviderId } from "@/utils/providers";
+import { buildDeslopPrompt } from "@/utils/systemPrompt";
 
 export interface ApiResponse {
   content: string;
@@ -66,6 +67,19 @@ interface ChatResponse {
 }
 
 const MAX_TOOL_ROUNDS = 15;
+
+/**
+ * Tool-round budget when deep research is enabled: high enough for
+ * thorough multi-query research, but still a backstop so a looping model
+ * always eventually answers (alongside the identical-repeat detection and
+ * the user's Stop button).
+ */
+const DEEP_RESEARCH_TOOL_ROUNDS = 50;
+
+/** Tool-round budget for a request, based on the deep-research setting. */
+function maxToolRounds(config: ApiConfig): number {
+  return config.deepResearchEnabled ? DEEP_RESEARCH_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
+}
 
 /**
  * Prefix prepended when the tool loop runs out of rounds (or repeats a call)
@@ -184,6 +198,29 @@ export async function sendMessage(
 }
 
 /**
+ * Run the "Remove AI slop" pass on a single draft: sends the draft as the
+ * only user message with the de-slop editor prompt and no tools, and
+ * returns the cleaned draft (or "No changes needed.").
+ *
+ * @param draft - The assistant message text to clean up.
+ * @param config - API configuration (provider, baseUrl, apiKey, model, ...).
+ * @param options - Live-text callback and an optional AbortSignal.
+ * @returns The cleaned reply content, or an error message.
+ */
+export async function deslopText(
+  draft: string,
+  config: ApiConfig,
+  options: SendMessageOptions = {},
+): Promise<ApiResponse> {
+  return sendMessage(
+    [{ role: "user", content: draft, timestamp: new Date().toISOString() }],
+    { ...config, webSearchEnabled: false },
+    buildDeslopPrompt(),
+    options,
+  );
+}
+
+/**
  * Stream a single chat-completions round through the Rust backend.
  * Resolves when the stream ends (or is stopped); text chunks are forwarded
  * to `onChunk` for live rendering.
@@ -263,7 +300,8 @@ async function streamChat(
  *
  * Runs a tool-calling loop: if the model requests `web_search` or
  * `fetch_page`, the tools are executed through Rust and their results are
- * fed back to the model, up to `MAX_TOOL_ROUNDS` rounds. If the model
+ * fed back to the model, up to `MAX_TOOL_ROUNDS` rounds (or
+ * `DEEP_RESEARCH_TOOL_ROUNDS` with deep research enabled). If the model
  * rejects the `tools` field, the request is retried once without it and a
  * short note is prepended to the reply. Providers that reject streaming
  * fall back to one-shot requests automatically.
@@ -394,7 +432,8 @@ async function sendOpenAICompatMessage(
     };
   };
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+  const maxRounds = maxToolRounds(config);
+  for (let round = 0; round < maxRounds; round++) {
     if (options.signal?.aborted) {
       return { content: streamedContent, stopped: true };
     }
@@ -679,7 +718,8 @@ async function sendAnthropicMessage(
     };
   };
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+  const maxRounds = maxToolRounds(config);
+  for (let round = 0; round < maxRounds; round++) {
     if (options.signal?.aborted) {
       return { content: streamedContent, stopped: true };
     }

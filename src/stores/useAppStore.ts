@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type TabId = "chat";
+export type TabId = "library" | "chat";
 
 interface AppState {
   activeTab: TabId;
