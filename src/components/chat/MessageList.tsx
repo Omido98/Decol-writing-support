@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useChatStore, messageKey } from "@/stores/chatStore";
+import { useLibraryStore } from "@/stores/libraryStore";
+import { deslopText } from "@/utils/api";
 import { cn } from "@/lib/utils";
 import {
   Copy,
@@ -9,6 +11,9 @@ import {
   ArrowDown,
   RotateCcw,
   RefreshCw,
+  Sparkles,
+  Loader2,
+  BookmarkPlus,
 } from "lucide-react";
 
 function LoadingDots() {
@@ -41,7 +46,13 @@ export default function MessageList({
   );
   const [stickyToBottom, setStickyToBottom] = useState(true);
 
+  const config = useChatStore((s) => s.config);
+  const addMessage = useChatStore((s) => s.addMessage);
+  const setError = useChatStore((s) => s.setError);
+
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [savedId, setSavedId] = useState<string | null>(null);
+  const [deslopPendingId, setDeslopPendingId] = useState<string | null>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Auto-scroll to the bottom only while the user is already near the bottom,
@@ -101,6 +112,41 @@ export default function MessageList({
     flashFeedback(msgId, setCopiedId);
   };
 
+  const handleSaveToLibrary = async (msgId: string, content: string) => {
+    if (!content.trim()) return;
+    const threadTitle = useChatStore
+      .getState()
+      .threads.find((t) => t.id === useChatStore.getState().activeThreadId)
+      ?.title;
+    await useLibraryStore.getState().createText({
+      title:
+        threadTitle && threadTitle !== "Untitled conversation"
+          ? threadTitle
+          : "Saved from chat",
+      content,
+    });
+    flashFeedback(msgId, setSavedId);
+  };
+
+  const handleDeslop = async (msgId: string, content: string) => {
+    if (!content.trim() || deslopPendingId) return;
+    setDeslopPendingId(msgId);
+    setError(null);
+    const result = await deslopText(content, config);
+    setDeslopPendingId(null);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    if (result.content.trim()) {
+      addMessage({
+        role: "assistant",
+        content: result.content,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  };
+
   if (messages.length === 0 && !isSending) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -124,7 +170,12 @@ export default function MessageList({
       {messages.map((msg) => {
         const isUser = msg.role === "user";
         const key = messageKey(msg);
-        const feedback = copiedId === key ? "copied" : null;
+        const feedback =
+          copiedId === key
+            ? "copied"
+            : savedId === key
+              ? "saved"
+              : null;
         return (
           <div
             key={key}
@@ -138,7 +189,7 @@ export default function MessageList({
                 <button
                   type="button"
                   onClick={() => onResend?.(key)}
-                  disabled={isSending}
+                  disabled={isSending || !!deslopPendingId}
                   className="text-destructive hover:text-destructive/80 transition-colors disabled:opacity-50"
                   title="Re-send message"
                   aria-label="Re-send message"
@@ -173,7 +224,7 @@ export default function MessageList({
                   <button
                     type="button"
                     onClick={() => onRegenerate?.(key)}
-                    disabled={isSending}
+                    disabled={isSending || !!deslopPendingId}
                     className="text-text-muted hover:text-text-primary transition-colors disabled:opacity-50"
                     title="Regenerate answer"
                     aria-label="Regenerate answer"
@@ -192,6 +243,37 @@ export default function MessageList({
                     <Check className="size-3.5 text-green-400" />
                   ) : (
                     <Copy className="size-3.5" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveToLibrary(key, msg.content)}
+                  className="text-text-muted hover:text-text-primary transition-colors"
+                  title={feedback === "saved" ? "Saved to Library!" : "Save to Library"}
+                  aria-label="Save to Library"
+                >
+                  {feedback === "saved" ? (
+                    <Check className="size-3.5 text-green-400" />
+                  ) : (
+                    <BookmarkPlus className="size-3.5" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeslop(key, msg.content)}
+                  disabled={isSending || !!deslopPendingId}
+                  className="text-text-muted hover:text-text-primary transition-colors disabled:opacity-50"
+                  title={
+                    deslopPendingId === key
+                      ? "Removing AI slop…"
+                      : "Remove AI slop"
+                  }
+                  aria-label="Remove AI slop"
+                >
+                  {deslopPendingId === key ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="size-3.5" />
                   )}
                 </button>
               </div>

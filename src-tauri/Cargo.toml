@@ -1,6 +1,6 @@
 [package]
 name = "decol-writing-support"
-version = "0.0.1"
+version = "0.0.2"
 description = "Decol Writing Support - write essays, articles and academic texts with a decolonial and anti-colonial perspective, with an AI chat assistant"
 authors = ["Omido98"]
 edition = "2021"

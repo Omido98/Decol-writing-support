@@ -17,3 +17,8 @@ export function formatTokenEstimate(tokens: number): string {
   const k = tokens / 1000;
   return `~${k >= 100 ? Math.round(k) : k.toFixed(1)}k tokens`;
 }
+
+/** Word count for display in the library UI. */
+export function wordCount(text: string): number {
+  return text.trim() ? text.trim().split(/\s+/).length : 0;
+}
