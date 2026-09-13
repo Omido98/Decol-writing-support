@@ -25,8 +25,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { AttachedLibraryText } from "@/types";
-import { MessageSquarePlus, Settings, Trash2 } from "lucide-react";
+import type { AttachedLibraryText, WritingBrief } from "@/types";
+import { composeBriefMessage, defaultBrief } from "@/utils/brief";
+import { ClipboardList, MessageSquarePlus, Settings, Trash2 } from "lucide-react";
+import BriefForm from "@/components/chat/BriefForm";
 
 interface ChatTabProps {
   /** Opens the general Settings dialog (used to configure the API). */
@@ -50,6 +52,9 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   const switchThread = useChatStore((s) => s.switchThread);
   const addMessage = useChatStore((s) => s.addMessage);
   const updateMessage = useChatStore((s) => s.updateMessage);
+  const brief = useChatStore((s) => s.brief);
+  const setBrief = useChatStore((s) => s.setBrief);
+  const setConfig = useChatStore((s) => s.setConfig);
   const isSending = useChatStore((s) => s.isSending);
   const setIsSending = useChatStore((s) => s.setIsSending);
   const setError = useChatStore((s) => s.setError);
@@ -121,6 +126,7 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
       mode: config.systemPromptMode ?? "standard",
       customPrompt: config.customSystemPrompt ?? "",
       deepResearch: config.deepResearchEnabled ?? false,
+      brief,
       attachedTexts: attachments.map(({ title, textType, content }) => ({
         title,
         textType,
@@ -135,12 +141,17 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
     config.systemPromptMode,
     config.customSystemPrompt,
     config.deepResearchEnabled,
+    brief,
     attachments,
   ]);
 
   // ── Input state ──
   const [showConfig, setShowConfig] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // ── Writing brief (edit dialog for a started thread) ──
+  const [briefOpen, setBriefOpen] = useState(false);
+  const [briefDraft, setBriefDraft] = useState<WritingBrief | null>(null);
 
   // Aborts the in-flight generation (used by the Stop button / Escape).
   const controllerRef = useRef<AbortController | null>(null);
@@ -242,6 +253,7 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
         mode: currentConfig.systemPromptMode ?? "standard",
         customPrompt: currentConfig.customSystemPrompt ?? "",
         deepResearch: currentConfig.deepResearchEnabled ?? false,
+        brief: useChatStore.getState().brief,
         attachedTexts: attachments.map(({ title, textType, content }) => ({
           title,
           textType,
@@ -342,6 +354,24 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   const handleSend = useCallback(() => {
     void sendText({ text: inputValue });
   }, [inputValue, sendText]);
+
+  // ── Start a thread from the writing brief ──
+  // The composed brief becomes the first (structured) user message; the
+  // brief is also remembered as the default for new threads.
+  const handleStart = useCallback(() => {
+    const b = brief ?? defaultBrief();
+    if (!b.topic.trim() || isSending) return;
+    void setConfig({ lastBrief: b });
+    void sendText({ text: composeBriefMessage(b) });
+  }, [brief, isSending, sendText, setConfig]);
+
+  // ── Save an edited brief mid-thread ──
+  const handleBriefSave = useCallback(() => {
+    if (!briefDraft) return;
+    setBrief(briefDraft);
+    void setConfig({ lastBrief: briefDraft });
+    setBriefOpen(false);
+  }, [briefDraft, setBrief, setConfig]);
 
   // ── Handle thread deletion ──
   const handleDeleteThread = useCallback(() => {
@@ -481,6 +511,19 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
           <Button
             variant="ghost"
             size="icon-sm"
+            onClick={() => {
+              setBriefDraft(brief ?? defaultBrief());
+              setBriefOpen(true);
+            }}
+            title="Edit writing brief"
+            aria-label="Edit writing brief"
+            disabled={isSending}
+          >
+            <ClipboardList className="size-4 text-text-secondary" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={() => setShowConfig(true)}
             title="Chat agent settings"
             aria-label="Chat agent settings"
@@ -490,26 +533,48 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
         </div>
       </div>
 
-      {/* Messages */}
-      <MessageList
-        onResend={(key) => void sendText({ resendKey: key })}
-        onRegenerate={(key) => void sendText({ regenerateKey: key })}
-      />
+      {/* Writing brief (standardized start: no free-text first message) */}
+      {messages.length === 0 ? (
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="max-w-2xl mx-auto space-y-4">
+            <p className="text-text-muted text-sm">
+              Fill in the writing brief to start. The agent treats these
+              answers as settled, discusses a plan with you, and drafts only
+              after you approve.
+            </p>
+            <BriefForm
+              brief={brief ?? defaultBrief()}
+              onChange={setBrief}
+              onSubmit={handleStart}
+              submitLabel="Start discussion"
+              busy={isSending}
+            />
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Messages */}
+          <MessageList
+            onResend={(key) => void sendText({ resendKey: key })}
+            onRegenerate={(key) => void sendText({ regenerateKey: key })}
+          />
 
-      {/* Input */}
-      <MessageInput
-        value={inputValue}
-        onChange={setDraft}
-        onSend={handleSend}
-        onStop={handleStop}
-        disabled={isSending}
-        tokenEstimate={tokenEstimate}
-        attachedTexts={attachments}
-        onOpenPicker={() => setPickerOpen(true)}
-        onRemoveAttachment={(id) =>
-          setAttachments((prev) => prev.filter((a) => a.id !== id))
-        }
-      />
+          {/* Input */}
+          <MessageInput
+            value={inputValue}
+            onChange={setDraft}
+            onSend={handleSend}
+            onStop={handleStop}
+            disabled={isSending}
+            tokenEstimate={tokenEstimate}
+            attachedTexts={attachments}
+            onOpenPicker={() => setPickerOpen(true)}
+            onRemoveAttachment={(id) =>
+              setAttachments((prev) => prev.filter((a) => a.id !== id))
+            }
+          />
+        </>
+      )}
 
       <AttachmentPicker
         open={pickerOpen}
@@ -517,6 +582,27 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
         selectedIds={attachments.map((a) => a.id)}
         onConfirm={handleAttachmentsConfirmed}
       />
+
+      {/* Edit the writing brief of a started thread */}
+      <Dialog open={briefOpen} onOpenChange={setBriefOpen}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit writing brief</DialogTitle>
+            <DialogDescription>
+              These answers are given to the agent as settled. Changes apply
+              to the rest of this conversation.
+            </DialogDescription>
+          </DialogHeader>
+          {briefDraft && (
+            <BriefForm
+              brief={briefDraft}
+              onChange={setBriefDraft}
+              onSubmit={handleBriefSave}
+              submitLabel="Save brief"
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

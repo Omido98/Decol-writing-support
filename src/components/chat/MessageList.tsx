@@ -147,20 +147,6 @@ export default function MessageList({
     }
   };
 
-  if (messages.length === 0 && !isSending) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center max-w-md space-y-4">
-          <p className="text-text-muted text-sm">
-            Send a message to start the conversation. The AI is your writing
-            partner for decolonial and anti-colonial texts — drafting,
-            revising, and rethinking together with you.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div
       ref={containerRef}

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ThreadMeta } from "@/types";
+import type { ThreadMeta, WritingBrief } from "@/types";
 import { saveJson, loadJson, deleteFile } from "@/utils/storage";
 import {
   deleteApiKeyFromKeychain,
@@ -51,6 +51,8 @@ export interface ApiConfig {
   systemPromptMode: "standard" | "custom";
   /** The user's custom prompt, used when systemPromptMode is "custom". */
   customSystemPrompt: string;
+  /** The last submitted writing brief, used as the default for new threads. */
+  lastBrief: WritingBrief | null;
 }
 
 export const ZEN_DEFAULT_BASE_URL = "https://opencode.ai/zen/v1";
@@ -65,6 +67,7 @@ const defaultApiConfig: ApiConfig = {
   deepResearchEnabled: false,
   systemPromptMode: "standard",
   customSystemPrompt: "",
+  lastBrief: null,
 };
 
 // ──────────────────────────────────────────────
@@ -73,6 +76,22 @@ const defaultApiConfig: ApiConfig = {
 
 function threadFile(id: string): string {
   return `chat_${id}.json`;
+}
+
+/**
+ * On-disk shape of a thread file. Older files stored a bare message
+ * array; the brief was added alongside the messages.
+ */
+interface ThreadFile {
+  messages: ChatMessage[];
+  brief: WritingBrief | null;
+}
+
+/** Normalize a loaded thread file: migrate the old bare-array shape. */
+function normalizeThreadFile(data: ThreadFile | ChatMessage[] | null): ThreadFile {
+  if (!data) return { messages: [], brief: null };
+  if (Array.isArray(data)) return { messages: data, brief: null };
+  return { messages: data.messages ?? [], brief: data.brief ?? null };
 }
 
 /** Derive a thread title from its first user message. */
@@ -88,7 +107,7 @@ function titleFromMessage(content: string): string {
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingThreadId: string | null = null;
-let pendingSnapshot: ChatMessage[] = [];
+let pendingSnapshot: ThreadFile | null = null;
 
 /** Write the current thread to disk, debounced. */
 function scheduleThreadSave() {
@@ -96,7 +115,7 @@ function scheduleThreadSave() {
   const threadId = s.activeThreadId;
   if (!threadId) return;
   pendingThreadId = threadId;
-  pendingSnapshot = [...s.messages];
+  pendingSnapshot = { messages: [...s.messages], brief: s.brief };
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     saveTimer = null;
@@ -129,6 +148,8 @@ export async function flushChatSave(): Promise<void> {
 interface ChatState {
   /** Chat messages of the active thread */
   messages: ChatMessage[];
+  /** The writing brief of the active thread (settled answers). */
+  brief: WritingBrief | null;
   /** Whether config has been loaded from disk */
   configLoaded: boolean;
   /** Whether the API is currently processing a request */
@@ -162,6 +183,8 @@ interface ChatState {
     key: string,
     updater: (msg: ChatMessage) => ChatMessage,
   ) => void;
+  /** Set (or clear) the writing brief of the active thread and persist it. */
+  setBrief: (brief: WritingBrief | null) => void;
 
   // Thread actions
   /** Load the thread list from disk; repair an active thread that vanished. */
@@ -197,6 +220,7 @@ interface ChatState {
 
 export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
+  brief: null,
   configLoaded: false,
   isSending: false,
   error: null,
@@ -244,6 +268,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     scheduleThreadSave();
   },
 
+  setBrief: (brief) => {
+    set({ brief });
+    scheduleThreadSave();
+  },
+
   // ── Threads ──
 
   loadThreads: async () => {
@@ -277,6 +306,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({
       threads: [meta, ...s.threads],
       messages: [],
+      brief: s.config.lastBrief ?? null,
       activeThreadId: id,
       threadLoaded: true,
       streamingText: "",
@@ -314,6 +344,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!threadId) {
       set({
         messages: [],
+        brief: null,
         activeThreadId: null,
         threadLoaded: true,
         streamingText: "",
@@ -325,8 +356,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       activeThreadId: threadId,
       streamingText: "",
     });
-    const data = await loadJson<ChatMessage[]>(threadFile(threadId));
-    set({ messages: data ?? [], threadLoaded: true });
+    const data = normalizeThreadFile(
+      await loadJson<ThreadFile | ChatMessage[]>(threadFile(threadId)),
+    );
+    set({ messages: data.messages, brief: data.brief, threadLoaded: true });
   },
 
   // ── Config ──
@@ -339,9 +372,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // The keychain is still preferred when loading (see loadConfig).
     if (cfg.apiKey) {
       await saveApiKeyToKeychain(cfg.apiKey);
-    } else {
-      // Key cleared: remove any stale keychain entry so an old key cannot
-      // resurface on the next launch.
+    } else if ("apiKey" in cfg) {
+      // Key explicitly cleared by the user (apiKey: ""): remove any stale
+      // keychain entry so an old key cannot resurface on the next launch.
+      // Updates that do not mention the key leave the keychain untouched.
       await deleteApiKeyFromKeychain();
     }
     await saveJson("config.json", next);
@@ -373,6 +407,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           deepResearchEnabled: data.deepResearchEnabled ?? false,
           systemPromptMode: data.systemPromptMode ?? "standard",
           customSystemPrompt: data.customSystemPrompt ?? "",
+          lastBrief: data.lastBrief ?? null,
         },
         configLoaded: true,
       });

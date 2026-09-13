@@ -96,13 +96,14 @@ const TOOLS: Array<Record<string, unknown>> = [
     function: {
       name: "web_search",
       description:
-        "Search the web for current information. Returns up to 5 results with title, URL and snippet. Use it to research a company's purpose, industry, and recent news or trends.",
+        "Search the web for current information. Returns up to 5 results with title, URL and snippet. Use it to research facts, current events, and scholarly literature, and to verify citations before including them.",
       parameters: {
         type: "object",
         properties: {
           query: {
             type: "string",
-            description: "The search query, e.g. a company name or topic.",
+            description:
+              "The search query, e.g. a topic, an event, or a work with its author.",
           },
         },
         required: ["query"],
@@ -114,7 +115,7 @@ const TOOLS: Array<Record<string, unknown>> = [
     function: {
       name: "fetch_page",
       description:
-        "Fetch a web page and return its text content (tags stripped, length-limited). Use it to read an actual company page or article.",
+        "Fetch a web page and return its text content (tags stripped, length-limited). Use it to read an article, a documentation page, or a scholarly source such as a journal or publisher page.",
       parameters: {
         type: "object",
         properties: {

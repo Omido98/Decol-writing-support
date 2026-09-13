@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { WritingBrief } from "@/types";
 import {
   buildDeslopPrompt,
   buildSystemPrompt,
@@ -98,13 +99,86 @@ describe("deep research prompt", () => {
     ).not.toContain("Research thoroughly");
   });
 
-  it("has no effect in custom mode, which replaces all instructions", () => {
-    expect(
-      buildSystemPrompt({
-        mode: "custom",
-        customPrompt: "My own instructions.",
-        deepResearch: true,
-      }),
-    ).toBe("My own instructions.");
+  it("has no effect in custom mode, but honesty rules always stay", () => {
+    const prompt = buildSystemPrompt({
+      mode: "custom",
+      customPrompt: "My own instructions.",
+      deepResearch: true,
+    });
+    expect(prompt).toContain("My own instructions.");
+    expect(prompt).not.toContain("one search and up to 5 page fetches");
+    expect(prompt).toContain("Honesty and evidence:");
+    expect(prompt).toContain("Never fabricate sources");
+  });
+});
+
+describe("briefing protocol", () => {
+  it("replaces the one-round cap with the brief + read-back protocol", () => {
+    const prompt = getStandardPrompt();
+    expect(prompt).not.toContain("one round");
+    expect(prompt).toContain("Writing Brief");
+    expect(prompt).toContain("summarize your understanding");
+    expect(prompt).toContain("propose an outline");
+  });
+
+  it("tells the agent to adapt to the audience and follow genre conventions", () => {
+    const prompt = getStandardPrompt();
+    expect(prompt).toContain("Audience and genre:");
+    expect(prompt).toContain("children need short sentences");
+    expect(prompt).toContain("academics expect engagement with the literature");
+  });
+
+  it("grounds texts in real literature and verifies citations", () => {
+    const prompt = getStandardPrompt();
+    expect(prompt).toContain("Literature and theory:");
+    expect(prompt).toContain("Verify citations before asserting them");
+    expect(prompt).toContain("Never invent a reference to fill a gap");
+  });
+});
+
+describe("writing brief section", () => {
+  const brief: WritingBrief = {
+    topic: "Land rights in Sápmi",
+    background: "For a lecture series",
+    textType: "article",
+    audience: "students",
+    tone: "academic",
+    citations: "apa",
+    length: "medium",
+    language: "English",
+    mustInclude: "",
+    mustAvoid: "",
+  };
+
+  it("appends the brief as a settled section in standard mode", () => {
+    const prompt = buildSystemPrompt({ mode: "standard", customPrompt: "", brief });
+    expect(prompt).toContain("Writing Brief (settled answers from the user)");
+    expect(prompt).toContain("- Topic: Land rights in Sápmi");
+    expect(prompt).toContain("- Audience: Students");
+    expect(prompt).toContain("Do not re-ask them");
+  });
+
+  it("uses the free-text values for other-audience/tone/citations", () => {
+    const prompt = buildSystemPrompt({
+      mode: "standard",
+      customPrompt: "",
+      brief: { ...brief, audience: "other", audienceOther: "Municipal planners" },
+    });
+    expect(prompt).toContain("- Audience: Municipal planners");
+  });
+
+  it("appends the brief in custom mode (user content, not instructions)", () => {
+    const prompt = buildSystemPrompt({
+      mode: "custom",
+      customPrompt: "My own instructions.",
+      brief,
+    });
+    expect(prompt).toContain("My own instructions.");
+    expect(prompt).toContain("Writing Brief (settled answers from the user)");
+  });
+
+  it("is not included when no brief is given", () => {
+    const prompt = buildSystemPrompt({ mode: "standard", customPrompt: "" });
+    expect(prompt).not.toContain("Writing Brief (settled answers from the user)");
   });
 });
