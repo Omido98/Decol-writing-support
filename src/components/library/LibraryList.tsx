@@ -1,10 +1,19 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { useProjectStore } from "@/stores/projectStore";
 import { exportTexts, importFiles } from "@/utils/libraryIo";
 import { textTypeLabel, type LibraryTextMeta } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -19,6 +28,8 @@ import {
   Download,
   FileInput,
   FolderInput,
+  FolderOpen,
+  FolderPlus,
   Loader2,
   Search,
   Trash2,
@@ -27,6 +38,8 @@ import {
 
 type TypeFilter = "all" | (typeof TEXT_TYPE_IDS)[number];
 type FolderFilter = "all" | "none" | string;
+type ProjectFilter = "all" | "standalone" | string;
+type SortOrder = "recent" | "title" | "created";
 
 const TEXT_TYPE_IDS = [
   "essay",
@@ -37,14 +50,20 @@ const TEXT_TYPE_IDS = [
   "other",
 ] as const;
 
-const TYPE_CHIP_LABELS: Record<TypeFilter, string> = {
-  all: "All",
+const TYPE_FILTER_LABELS: Record<TypeFilter, string> = {
+  all: "All types",
   essay: "Essays",
   article: "Articles",
   "research-paper": "Research papers",
   letter: "Letters",
   talk: "Talks",
   other: "Other",
+};
+
+const SORT_LABELS: Record<SortOrder, string> = {
+  recent: "Recently updated",
+  created: "Newest first",
+  title: "Title A–Z",
 };
 
 function formatDate(iso: string): string {
@@ -58,22 +77,49 @@ function formatDate(iso: string): string {
 export default function LibraryList({
   onOpen,
   onNew,
+  onOpenProject,
 }: {
   onOpen: (id: string) => void;
   onNew: (prefill?: { content: string }) => void;
+  onOpenProject: (id: string) => void;
 }) {
   const texts = useLibraryStore((s) => s.texts);
+  const projects = useProjectStore((s) => s.projects);
+  const projectsLoaded = useProjectStore((s) => s.projectsLoaded);
+  const loadProjects = useProjectStore((s) => s.loadProjects);
 
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [folderFilter, setFolderFilter] = useState<FolderFilter>("all");
+  const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("recent");
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   const [moveFolder, setMoveFolder] = useState("");
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [projectTarget, setProjectTarget] = useState<string>("standalone");
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [newProjectTitle, setNewProjectTitle] = useState("");
+  const [newProjectDescription, setNewProjectDescription] = useState("");
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+
+  useEffect(() => {
+    if (!projectsLoaded) void loadProjects();
+  }, [projectsLoaded, loadProjects]);
+
+  const handleCreateProject = async () => {
+    const id = await useProjectStore.getState().createProject({
+      title: newProjectTitle,
+      description: newProjectDescription,
+    });
+    setCreateProjectOpen(false);
+    setNewProjectTitle("");
+    setNewProjectDescription("");
+    onOpenProject(id);
+  };
 
   const folders = [
     ...new Set(
@@ -81,22 +127,47 @@ export default function LibraryList({
     ),
   ].sort();
 
-  const filtered = texts.filter((t) => {
-    if (
-      search.trim() &&
-      !`${t.title} ${t.snippet ?? ""}`
-        .toLowerCase()
-        .includes(search.trim().toLowerCase())
-    ) {
-      return false;
-    }
-    if (typeFilter !== "all" && t.textType !== typeFilter) return false;
-    if (folderFilter === "none" && t.folder) return false;
-    if (typeof folderFilter === "string" && folderFilter !== "all" && t.folder !== folderFilter) {
-      return false;
-    }
-    return true;
-  });
+  const filtered = texts
+    .filter((t) => {
+      if (
+        search.trim() &&
+        !`${t.title} ${t.snippet ?? ""}`
+          .toLowerCase()
+          .includes(search.trim().toLowerCase())
+      ) {
+        return false;
+      }
+      if (typeFilter !== "all" && t.textType !== typeFilter) return false;
+      if (folderFilter === "none" && t.folder) return false;
+      if (typeof folderFilter === "string" && folderFilter !== "all" && t.folder !== folderFilter) {
+        return false;
+      }
+      if (projectFilter === "standalone" && t.projectId) return false;
+      if (
+        projectFilter !== "all" &&
+        projectFilter !== "standalone" &&
+        t.projectId !== projectFilter
+      ) {
+        return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      if (sortOrder === "title") return a.title.localeCompare(b.title);
+      if (sortOrder === "created") return a.createdAt < b.createdAt ? 1 : -1;
+      return a.updatedAt < b.updatedAt ? 1 : -1;
+    });
+
+  const projectById = new Map(projects.map((p) => [p.id, p]));
+  const projectStats = (projectId: string) => {
+    const members = texts.filter((t) => t.projectId === projectId);
+    return {
+      count: members.length,
+      words: members.reduce((sum, t) => sum + (t.wordCount ?? 0), 0),
+    };
+  };
+
+  const showProjects = projectFilter === "all";
 
   const toggleSelected = (id: string) => {
     setSelected((prev) => {
@@ -170,6 +241,16 @@ export default function LibraryList({
     exitSelection();
   };
 
+  const handleProjectSelected = async () => {
+    for (const id of selected) {
+      await useLibraryStore
+        .getState()
+        .updateText(id, { projectId: projectTarget === "standalone" ? "" : projectTarget });
+    }
+    setProjectOpen(false);
+    exitSelection();
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
@@ -210,6 +291,15 @@ export default function LibraryList({
             Import
           </Button>
           <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCreateProjectOpen(true)}
+            title="Create a new project"
+          >
+            <FolderPlus className="size-4 mr-1" />
+            New project
+          </Button>
+          <Button
             size="sm"
             className="bg-primary hover:bg-primary/80 text-primary-foreground"
             onClick={() => void handleNew()}
@@ -221,48 +311,65 @@ export default function LibraryList({
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-1.5 px-6 py-2 border-b border-border shrink-0 flex-wrap">
-        {(Object.keys(TYPE_CHIP_LABELS) as TypeFilter[]).map((id) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTypeFilter(id)}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors select-none ${
-              typeFilter === id
-                ? "bg-primary text-primary-foreground"
-                : "bg-surface text-text-secondary hover:bg-border hover:text-text-primary"
-            }`}
-          >
-            {TYPE_CHIP_LABELS[id]}
-          </button>
-        ))}
-        <span className="mx-2 h-4 w-px bg-border" aria-hidden="true" />
-        <button
-          type="button"
-          onClick={() => setFolderFilter("all")}
-          className={`px-3 py-1 rounded-full text-xs font-medium transition-colors select-none flex items-center gap-1 ${
-            folderFilter === "all"
-              ? "bg-primary text-primary-foreground"
-              : "bg-surface text-text-secondary hover:bg-border hover:text-text-primary"
-          }`}
+      <div className="flex items-center gap-2 px-6 py-2 border-b border-border shrink-0 flex-wrap">
+        <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as TypeFilter)}>
+          <SelectTrigger className="w-[150px] h-8 bg-surface text-xs" aria-label="Filter by type">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(Object.keys(TYPE_FILTER_LABELS) as TypeFilter[]).map((id) => (
+              <SelectItem key={id} value={id}>
+                {TYPE_FILTER_LABELS[id]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={projectFilter}
+          onValueChange={(v) => setProjectFilter(v as ProjectFilter)}
         >
-          All folders
-        </button>
-        {folders.map((folder) => (
-          <button
-            key={folder}
-            type="button"
-            onClick={() => setFolderFilter(folder)}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors select-none flex items-center gap-1 ${
-              folderFilter === folder
-                ? "bg-primary text-primary-foreground"
-                : "bg-surface text-text-secondary hover:bg-border hover:text-text-primary"
-            }`}
-          >
-            <FolderInput className="size-3" />
-            {folder}
-          </button>
-        ))}
+          <SelectTrigger className="w-[170px] h-8 bg-surface text-xs" aria-label="Filter by project">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All projects</SelectItem>
+            <SelectItem value="standalone">Standalone texts</SelectItem>
+            {projects.map((p) => (
+              <SelectItem key={p.id} value={p.id}>
+                <span className="truncate max-w-[160px] block">{p.title}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={folderFilter}
+          onValueChange={(v) => setFolderFilter(v as FolderFilter)}
+        >
+          <SelectTrigger className="w-[140px] h-8 bg-surface text-xs" aria-label="Filter by folder">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All folders</SelectItem>
+            <SelectItem value="none">No folder</SelectItem>
+            {folders.map((folder) => (
+              <SelectItem key={folder} value={folder}>
+                {folder}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={sortOrder} onValueChange={(v) => setSortOrder(v as SortOrder)}>
+          <SelectTrigger className="w-[170px] h-8 bg-surface text-xs" aria-label="Sort order">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(Object.keys(SORT_LABELS) as SortOrder[]).map((id) => (
+              <SelectItem key={id} value={id}>
+                {SORT_LABELS[id]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Bulk action bar */}
@@ -278,6 +385,20 @@ export default function LibraryList({
           >
             <FolderInput className="size-4 mr-1" />
             Move to folder
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const first = [...selected]
+                .map((id) => texts.find((t) => t.id === id))
+                .find((t) => !!t);
+              setProjectTarget(first?.projectId ?? "standalone");
+              setProjectOpen(true);
+            }}
+          >
+            <FolderOpen className="size-4 mr-1" />
+            Project
           </Button>
           <Button
             variant="outline"
@@ -306,6 +427,57 @@ export default function LibraryList({
 
       {/* Cards */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
+        {/* Projects section */}
+        {showProjects && projects.length > 0 && (
+          <div className="max-w-4xl mx-auto mb-6">
+            <div className="grid gap-3">
+              {projects.map((p) => {
+                const stats = projectStats(p.id);
+                return (
+                  <div
+                    key={p.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onOpenProject(p.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onOpenProject(p.id);
+                      }
+                    }}
+                    className="flex items-start gap-3 rounded-lg border border-border bg-surface px-5 py-4 cursor-pointer hover:border-primary/40 transition-colors text-left"
+                  >
+                    <FolderOpen className="size-5 mt-0.5 shrink-0 text-primary" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-text-primary truncate max-w-full">
+                          {p.title}
+                        </span>
+                        <span className="shrink-0 px-2 py-0.5 rounded-full bg-primary/10 border border-primary/30 text-[11px] font-medium text-text-primary">
+                          Project
+                        </span>
+                      </div>
+                      {p.description && (
+                        <p className="mt-1 text-sm text-text-secondary line-clamp-1">
+                          {p.description}
+                        </p>
+                      )}
+                      <p className="mt-1.5 text-[11px] text-text-muted select-none">
+                        {stats.count} text{stats.count === 1 ? "" : "s"} ·{" "}
+                        {stats.words.toLocaleString()} words
+                        {p.briefWordCount
+                          ? ` · brief ${p.briefWordCount.toLocaleString()} words`
+                          : " · no brief yet"}{" "}
+                        · updated {formatDate(p.updatedAt)}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <p className="text-text-primary text-lg font-semibold">
@@ -314,60 +486,69 @@ export default function LibraryList({
             <p className="text-text-muted text-sm mt-2 max-w-md">
               {texts.length === 0
                 ? "Save a text from the chat with the bookmark button, paste one in with New text, or import a file."
-                : "Try a different search, type, or folder filter."}
+                : "Try a different search, type, project, or folder filter."}
             </p>
           </div>
         ) : (
           <div className="grid gap-3 max-w-4xl mx-auto">
-            {filtered.map((t) => (
-              <div
-                key={t.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => (selecting ? toggleSelected(t.id) : onOpen(t.id))}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    selecting ? toggleSelected(t.id) : onOpen(t.id);
-                  }
-                }}
-                className="flex items-start gap-3 rounded-lg border border-border bg-surface px-5 py-4 cursor-pointer hover:border-primary/40 transition-colors text-left"
-              >
-                {selecting && (
-                  <Checkbox
-                    checked={selected.has(t.id)}
-                    onCheckedChange={() => toggleSelected(t.id)}
-                    onClick={(e) => e.stopPropagation()}
-                    className="mt-1"
-                    aria-label={`Select ${t.title}`}
-                  />
-                )}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-semibold text-text-primary truncate max-w-full">
-                      {t.title}
-                    </span>
-                    <span className="shrink-0 px-2 py-0.5 rounded-full bg-surface-alt border border-border text-[11px] font-medium text-text-secondary">
-                      {textTypeLabel(t.textType)}
-                    </span>
-                    {t.folder && (
-                      <span className="shrink-0 px-2 py-0.5 rounded-full bg-surface-alt border border-border text-[11px] font-medium text-text-secondary flex items-center gap-1">
-                        <FolderInput className="size-3" />
-                        {t.folder}
-                      </span>
-                    )}
-                  </div>
-                  {t.snippet && (
-                    <p className="mt-1.5 text-sm text-text-secondary line-clamp-2 [font-family:var(--font-doc)]">
-                      {t.snippet}
-                    </p>
+            {filtered.map((t) => {
+              const project = t.projectId ? projectById.get(t.projectId) : null;
+              return (
+                <div
+                  key={t.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => (selecting ? toggleSelected(t.id) : onOpen(t.id))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      selecting ? toggleSelected(t.id) : onOpen(t.id);
+                    }
+                  }}
+                  className="flex items-start gap-3 rounded-lg border border-border bg-surface px-5 py-4 cursor-pointer hover:border-primary/40 transition-colors text-left"
+                >
+                  {selecting && (
+                    <Checkbox
+                      checked={selected.has(t.id)}
+                      onCheckedChange={() => toggleSelected(t.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-1"
+                      aria-label={`Select ${t.title}`}
+                    />
                   )}
-                  <p className="mt-1.5 text-[11px] text-text-muted select-none">
-                    {t.wordCount ?? 0} words · updated {formatDate(t.updatedAt)}
-                  </p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-text-primary truncate max-w-full">
+                        {t.title}
+                      </span>
+                      <span className="shrink-0 px-2 py-0.5 rounded-full bg-surface-alt border border-border text-[11px] font-medium text-text-secondary">
+                        {textTypeLabel(t.textType)}
+                      </span>
+                      {project && (
+                        <span className="shrink-0 px-2 py-0.5 rounded-full bg-primary/10 border border-primary/30 text-[11px] font-medium text-text-primary flex items-center gap-1 max-w-[200px]">
+                          <FolderOpen className="size-3 shrink-0" />
+                          <span className="truncate">{project.title}</span>
+                        </span>
+                      )}
+                      {t.folder && (
+                        <span className="shrink-0 px-2 py-0.5 rounded-full bg-surface-alt border border-border text-[11px] font-medium text-text-secondary flex items-center gap-1">
+                          <FolderInput className="size-3" />
+                          {t.folder}
+                        </span>
+                      )}
+                    </div>
+                    {t.snippet && (
+                      <p className="mt-1.5 text-sm text-text-secondary line-clamp-2 [font-family:var(--font-doc)]">
+                        {t.snippet}
+                      </p>
+                    )}
+                    <p className="mt-1.5 text-[11px] text-text-muted select-none">
+                      {t.wordCount ?? 0} words · updated {formatDate(t.updatedAt)}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -427,6 +608,100 @@ export default function LibraryList({
               onClick={() => void handleMoveSelected()}
             >
               Move
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create project */}
+      <Dialog open={createProjectOpen} onOpenChange={setCreateProjectOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New project</DialogTitle>
+            <DialogDescription>
+              A project groups texts that share an audience, voice, and
+              background. You can develop its brief with the chat agent in
+              Project mode.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="new-project-title">Title</Label>
+              <Input
+                id="new-project-title"
+                value={newProjectTitle}
+                onChange={(e) => setNewProjectTitle(e.target.value)}
+                placeholder="e.g. Essays on extractivism"
+                className="bg-field"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newProjectTitle.trim()) {
+                    void handleCreateProject();
+                  }
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="new-project-description">Description (optional)</Label>
+              <Input
+                id="new-project-description"
+                value={newProjectDescription}
+                onChange={(e) => setNewProjectDescription(e.target.value)}
+                placeholder="One line on what the project is"
+                className="bg-field"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateProjectOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-primary hover:bg-primary/80 text-primary-foreground"
+              onClick={() => void handleCreateProject()}
+              disabled={!newProjectTitle.trim()}
+            >
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Assign to project */}
+      <Dialog open={projectOpen} onOpenChange={setProjectOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Project membership</DialogTitle>
+            <DialogDescription>
+              Move the selected text
+              {selected.size === 1 ? "" : "s"} into a project, or make them
+              standalone. Project texts build on their project&apos;s brief.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="project-target">Project</Label>
+            <Select value={projectTarget} onValueChange={(v) => setProjectTarget(v ?? "standalone")}>
+              <SelectTrigger id="project-target" className="w-full bg-field">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="standalone">Standalone (no project)</SelectItem>
+                {projects.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    <span className="truncate max-w-[320px] block">{p.title}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setProjectOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-primary hover:bg-primary/80 text-primary-foreground"
+              onClick={() => void handleProjectSelected()}
+            >
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>

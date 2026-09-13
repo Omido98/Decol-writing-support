@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ThreadMeta, WritingBrief } from "@/types";
+import type { ThreadMeta, ThreadMode, WritingBrief } from "@/types";
 import { saveJson, loadJson, deleteFile } from "@/utils/storage";
 import {
   deleteApiKeyFromKeychain,
@@ -16,12 +16,23 @@ import {
 // Chat message type (lighter than the full Message type)
 // ──────────────────────────────────────────────
 
+/** Extracted text of an uploaded document, saved with the message. */
+export interface FileAttachment {
+  name: string;
+  kind: string;
+  content: string;
+  /** Word count of the extracted text. */
+  wordCount?: number;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   timestamp: string;
   /** True when the send failed (no reply landed); shows a re-send action. */
   failed?: boolean;
+  /** Extracted text of documents uploaded with this message. */
+  fileAttachments?: FileAttachment[];
 }
 
 /**
@@ -80,7 +91,8 @@ function threadFile(id: string): string {
 
 /**
  * On-disk shape of a thread file. Older files stored a bare message
- * array; the brief was added alongside the messages.
+ * array; the brief was added alongside the messages. A thread's mode and
+ * project link live in threads.json only.
  */
 interface ThreadFile {
   messages: ChatMessage[];
@@ -185,6 +197,11 @@ interface ChatState {
   ) => void;
   /** Set (or clear) the writing brief of the active thread and persist it. */
   setBrief: (brief: WritingBrief | null) => void;
+  /**
+   * Set the mode (and optional project link) of the active thread and
+   * persist it. Only possible while the thread has no messages yet.
+   */
+  setThreadMode: (mode: ThreadMode, projectId?: string) => Promise<void>;
 
   // Thread actions
   /** Load the thread list from disk; repair an active thread that vanished. */
@@ -270,6 +287,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setBrief: (brief) => {
     set({ brief });
+    scheduleThreadSave();
+  },
+
+  setThreadMode: async (mode, projectId) => {
+    const s = get();
+    if (!s.activeThreadId || s.messages.length > 0) return;
+    set((state) => ({
+      threads: state.threads.map((t) =>
+        t.id === state.activeThreadId
+          ? {
+              ...t,
+              mode,
+              ...(projectId ? { projectId } : { projectId: undefined }),
+              updatedAt: new Date().toISOString(),
+            }
+          : t,
+      ),
+    }));
+    await saveJson("threads.json", get().threads);
     scheduleThreadSave();
   },
 

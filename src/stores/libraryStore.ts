@@ -73,11 +73,12 @@ export interface LibraryState {
   /** Load the text list from disk. */
   loadTexts: () => Promise<void>;
 
-  /** Create a text (optionally with initial title/type/folder/content) and return its id. */
+  /** Create a text (optionally with initial title/type/folder/project/content) and return its id. */
   createText: (initial?: {
     title?: string;
     textType?: TextTypeId;
     folder?: string;
+    projectId?: string;
     content?: string;
   }) => Promise<string>;
 
@@ -88,6 +89,7 @@ export interface LibraryState {
       title?: string;
       textType?: TextTypeId;
       folder?: string;
+      projectId?: string;
       content?: string;
     },
   ) => Promise<void>;
@@ -169,6 +171,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       title: initial.title?.trim() || "Untitled text",
       textType: initial.textType ?? "other",
       ...(initial.folder !== undefined ? { folder: initial.folder } : {}),
+      ...(initial.projectId ? { projectId: initial.projectId } : {}),
       ...(content ? contentDerivedMeta(content) : {}),
       createdAt: now,
       updatedAt: now,
@@ -183,7 +186,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     const metaChanged =
       patch.title !== undefined ||
       patch.textType !== undefined ||
-      patch.folder !== undefined;
+      patch.folder !== undefined ||
+      patch.projectId !== undefined;
 
     set((s) => ({
       texts: s.texts.map((t) =>
@@ -195,6 +199,11 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
                 ? { textType: patch.textType }
                 : {}),
               ...(patch.folder !== undefined ? { folder: patch.folder } : {}),
+              ...(patch.projectId !== undefined
+                ? patch.projectId
+                  ? { projectId: patch.projectId }
+                  : { projectId: undefined }
+                : {}),
               ...(patch.content !== undefined
                 ? contentDerivedMeta(patch.content)
                 : {}),

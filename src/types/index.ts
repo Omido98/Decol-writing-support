@@ -2,10 +2,17 @@
 // Core domain types for Decol Writing Support
 // ============================================================
 
+/** What a chat thread is for: writing a text or developing a project brief. */
+export type ThreadMode = "text" | "project";
+
 /** Metadata for a standalone chat thread. */
 export interface ThreadMeta {
   id: string;
   title: string;
+  /** Whether the thread writes a text or develops a project brief. */
+  mode?: ThreadMode;
+  /** Project the thread is linked to (brief agent or text-in-project). */
+  projectId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -45,6 +52,8 @@ export interface LibraryTextMeta {
   textType: TextTypeId;
   /** Optional one-level folder name for organizing texts. */
   folder?: string;
+  /** Project the text belongs to; absent for standalone texts. */
+  projectId?: string;
   /** First ~180 characters of content, for the list-card preview. */
   snippet?: string;
   /** Cached word count, so cards can show size without loading content. */
@@ -194,4 +203,32 @@ export interface WritingBrief {
   mustInclude: string;
   /** Things the text must avoid (words, framings, sources). */
   mustAvoid: string;
+}
+
+// ──────────────────────────────────────────────
+// Projects
+// ──────────────────────────────────────────────
+
+/**
+ * A project bundles several texts that share audience, voice, citation
+ * style, and background. The brief is free-form markdown; the defaults
+ * pre-fill the writing brief of texts created inside the project.
+ */
+export interface ProjectMeta {
+  id: string;
+  title: string;
+  /** One-line description shown on the project card. */
+  description?: string;
+  /** Default audience texts of this project inherit. */
+  defaultAudience?: AudienceId;
+  /** Default tone texts of this project inherit. */
+  defaultTone?: ToneId;
+  /** Default citation style texts of this project inherit. */
+  defaultCitations?: CitationId;
+  /** Default language texts of this project inherit. */
+  defaultLanguage?: string;
+  /** Cached word count of the brief, for the project card. */
+  briefWordCount?: number;
+  createdAt: string;
+  updatedAt: string;
 }
