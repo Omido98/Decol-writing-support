@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChatStore, messageKey, type ChatMessage } from "@/stores/chatStore";
+import { useLibraryStore } from "@/stores/libraryStore";
 import { sendMessage } from "@/utils/api";
 import { buildSystemPrompt } from "@/utils/systemPrompt";
 import { estimateTokens } from "@/utils/tokens";
 import ChatSettings from "@/components/chat/ChatSettings";
 import MessageList from "@/components/chat/MessageList";
 import MessageInput from "@/components/chat/MessageInput";
+import AttachmentPicker from "@/components/library/AttachmentPicker";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -23,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { AttachedLibraryText } from "@/types";
 import { MessageSquarePlus, Settings, Trash2 } from "lucide-react";
 
 interface ChatTabProps {
@@ -57,14 +60,72 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   const setDraft = useChatStore((s) => s.setDraft);
   const messages = useChatStore((s) => s.messages);
 
+  // ── Library attachments (applied to the next send only) ──
+  const pendingAttachId = useLibraryStore((s) => s.pendingAttachId);
+  const libraryTexts = useLibraryStore((s) => s.texts);
+  const libraryTextsLoaded = useLibraryStore((s) => s.textsLoaded);
+  const clearPendingAttach = useLibraryStore((s) => s.clearPendingAttach);
+  const [attachments, setAttachments] = useState<AttachedLibraryText[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
   const activeThread = threads.find((t) => t.id === activeThreadId) ?? null;
 
+  // Drop attachments whose underlying text was deleted in the library.
+  useEffect(() => {
+    if (!libraryTextsLoaded) return;
+    setAttachments((prev) =>
+      prev.filter((a) => libraryTexts.some((t) => t.id === a.id)),
+    );
+  }, [libraryTexts, libraryTextsLoaded]);
+
+  /** Load and add a library text as an attachment (idempotent). */
+  const addAttachment = useCallback(async (id: string) => {
+    if (!useLibraryStore.getState().textsLoaded) {
+      await useLibraryStore.getState().loadTexts();
+    }
+    const store = useLibraryStore.getState();
+    const meta = store.texts.find((t) => t.id === id);
+    if (!meta) return;
+    const content = await store.loadTextContent(id);
+    setAttachments((prev) =>
+      prev.some((a) => a.id === id)
+        ? prev
+        : [
+            ...prev,
+            { id: meta.id, title: meta.title, textType: meta.textType, content },
+          ],
+    );
+  }, []);
+
+  // Consume the "Ask the chat" handoff from the library tab.
+  useEffect(() => {
+    if (!pendingAttachId) return;
+    const id = pendingAttachId;
+    clearPendingAttach();
+    void addAttachment(id);
+  }, [pendingAttachId, clearPendingAttach, addAttachment]);
+
+  const handleAttachmentsConfirmed = useCallback(
+    (ids: string[]) => {
+      for (const id of ids) void addAttachment(id);
+      // Also drop attachments the user unchecked in the picker.
+      setAttachments((prev) => prev.filter((a) => ids.includes(a.id)));
+    },
+    [addAttachment],
+  );
+
   // Live estimate of the input tokens the next send would consume
-  // (system prompt + conversation history + typed draft).
+  // (system prompt + conversation history + typed draft + attachments).
   const tokenEstimate = useMemo(() => {
     const prompt = buildSystemPrompt({
       mode: config.systemPromptMode ?? "standard",
       customPrompt: config.customSystemPrompt ?? "",
+      deepResearch: config.deepResearchEnabled ?? false,
+      attachedTexts: attachments.map(({ title, textType, content }) => ({
+        title,
+        textType,
+        content,
+      })),
     });
     const historyText = messages.map((m) => m.content).join("\n");
     return estimateTokens(`${prompt}\n${historyText}\n${inputValue}`);
@@ -73,6 +134,8 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
     inputValue,
     config.systemPromptMode,
     config.customSystemPrompt,
+    config.deepResearchEnabled,
+    attachments,
   ]);
 
   // ── Input state ──
@@ -178,6 +241,12 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
       const systemPrompt = buildSystemPrompt({
         mode: currentConfig.systemPromptMode ?? "standard",
         customPrompt: currentConfig.customSystemPrompt ?? "",
+        deepResearch: currentConfig.deepResearchEnabled ?? false,
+        attachedTexts: attachments.map(({ title, textType, content }) => ({
+          title,
+          textType,
+          content,
+        })),
       });
 
       const threadAtSend = useChatStore.getState().activeThreadId;
@@ -251,6 +320,9 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
         setStreamingText("");
         setIsSending(false);
       }
+      // Attachments apply to the send that used them: clear them once the
+      // request landed (kept on error so a retry reuses the same context).
+      if (!result.error) setAttachments([]);
       controllerRef.current = null;
     },
     [
@@ -262,6 +334,7 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
       setError,
       setStreamingText,
       setDraft,
+      attachments,
     ],
   );
 
@@ -431,6 +504,18 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
         onStop={handleStop}
         disabled={isSending}
         tokenEstimate={tokenEstimate}
+        attachedTexts={attachments}
+        onOpenPicker={() => setPickerOpen(true)}
+        onRemoveAttachment={(id) =>
+          setAttachments((prev) => prev.filter((a) => a.id !== id))
+        }
+      />
+
+      <AttachmentPicker
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        selectedIds={attachments.map((a) => a.id)}
+        onConfirm={handleAttachmentsConfirmed}
       />
     </div>
   );

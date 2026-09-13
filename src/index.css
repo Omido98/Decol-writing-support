@@ -200,3 +200,50 @@
 .chat-markdown tbody tr:nth-child(even) td {
   background: var(--field);
 }
+
+/* ============================================================
+   Library documents — the reading view renders saved texts as
+   full documents: serif at DESIGN.md doc-lg (17px/1.75), on the
+   doc-column width. Same table styling as chat documents.
+   ============================================================ */
+.doc-markdown {
+  font-family: var(--font-doc);
+  color: var(--text-primary);
+  font-size: 1.0625rem;
+  line-height: 1.75;
+}
+.doc-markdown h1,
+.doc-markdown h2,
+.doc-markdown h3 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 1.5em 0 0.5em;
+}
+.doc-markdown h1 { font-size: 1.35rem; }
+.doc-markdown h2 { font-size: 1.2rem; }
+.doc-markdown h3 { font-size: 1.05rem; }
+.doc-markdown p { margin: 0.75em 0; }
+.doc-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75rem 0 1rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+.doc-markdown th {
+  background: var(--field);
+  font-weight: 600;
+  text-align: left;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+.doc-markdown td {
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--border);
+  vertical-align: top;
+}
+.doc-markdown tbody tr:nth-child(even) td {
+  background: var(--field);
+}

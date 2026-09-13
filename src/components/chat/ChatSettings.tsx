@@ -29,6 +29,9 @@ export default function ChatSettings({
   const [webSearchEnabled, setWebSearchEnabled] = useState(
     config.webSearchEnabled ?? false,
   );
+  const [deepResearchEnabled, setDeepResearchEnabled] = useState(
+    config.deepResearchEnabled ?? false,
+  );
   const [promptMode, setPromptMode] = useState(
     config.systemPromptMode ?? "standard",
   );
@@ -40,13 +43,15 @@ export default function ChatSettings({
 
   useEffect(() => {
     setWebSearchEnabled(config.webSearchEnabled ?? false);
+    setDeepResearchEnabled(config.deepResearchEnabled ?? false);
     setPromptMode(config.systemPromptMode ?? "standard");
     setCustomPrompt(config.customSystemPrompt ?? "");
-  }, [config.webSearchEnabled, config.systemPromptMode, config.customSystemPrompt]);
+  }, [config.webSearchEnabled, config.deepResearchEnabled, config.systemPromptMode, config.customSystemPrompt]);
 
   const handleSave = async () => {
     await setConfig({
       webSearchEnabled,
+      deepResearchEnabled,
       systemPromptMode: promptMode,
       customSystemPrompt: customPrompt,
     });
@@ -87,8 +92,40 @@ export default function ChatSettings({
             </Label>
             <p className="text-xs text-text-muted">
               Let the agent search the web and fetch pages to check facts
-              while you work (up to 5 pages per turn). Turn it off if your
-              model keeps requesting web tools without answering.
+              while you work (one search and up to 5 pages per turn). Turn
+              it off if your model keeps requesting web tools without
+              answering.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Deep Research */}
+      <div className="space-y-1.5">
+        <div className="flex items-start gap-2">
+          <Checkbox
+            id="deep-research-enabled"
+            checked={deepResearchEnabled}
+            onCheckedChange={(checked) => {
+              const on = checked === true;
+              setDeepResearchEnabled(on);
+              // Deep research needs the web tools to do anything.
+              if (on) setWebSearchEnabled(true);
+            }}
+            className="mt-0.5"
+          />
+          <div className="space-y-1">
+            <Label
+              htmlFor="deep-research-enabled"
+              className="text-text-secondary text-xs cursor-pointer"
+            >
+              Deep research
+            </Label>
+            <p className="text-xs text-text-muted">
+              Let the agent research thoroughly: multiple searches with
+              varied queries and many page fetches until the key claims are
+              verified. Slower and uses more tokens. Has no effect with a
+              custom prompt, which replaces these instructions entirely.
             </p>
           </div>
         </div>

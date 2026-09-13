@@ -8,18 +8,22 @@ import {
   getAccentForeground,
 } from "@/stores/settingsStore";
 import { flushChatSave } from "@/stores/chatStore";
+import { flushLibrarySave } from "@/stores/libraryStore";
+import LibraryTab from "@/components/library/LibraryTab";
 import ChatTab from "@/components/tabs/ChatTab";
 import SettingsDialog from "@/components/settings/SettingsDialog";
 import { Button } from "@/components/ui/button";
 
-type TabId = "chat";
+type TabId = "library" | "chat";
 
 const tabs: { id: TabId; label: string }[] = [
+  { id: "library", label: "Library" },
   { id: "chat", label: "Writing Support" },
 ];
 
 function flushPendingSaves() {
   void flushChatSave();
+  void flushLibrarySave();
 }
 
 function App() {
@@ -46,9 +50,9 @@ function App() {
     void (async () => {
       try {
         const win = getCurrentWindow();
-        unlisten = await win.onCloseRequested(async (event) => {
-          event.preventDefault();
-          await flushChatSave();
+          unlisten = await win.onCloseRequested(async (event) => {
+            event.preventDefault();
+            await Promise.all([flushChatSave(), flushLibrarySave()]);
           try {
             await win.destroy();
           } catch {
@@ -91,6 +95,8 @@ function App() {
 
   const renderTab = () => {
     switch (activeTab as TabId) {
+      case "library":
+        return <LibraryTab />;
       case "chat":
         return <ChatTab onOpenSettings={() => setShowSettings(true)} />;
       default:
