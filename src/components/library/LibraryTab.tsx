@@ -3,11 +3,13 @@ import { useLibraryStore } from "@/stores/libraryStore";
 import LibraryList from "@/components/library/LibraryList";
 import LibraryReader from "@/components/library/LibraryReader";
 import LibraryEditor from "@/components/library/LibraryEditor";
+import ProjectDetail from "@/components/library/ProjectDetail";
 
 type View =
   | { kind: "list" }
   | { kind: "read"; id: string }
-  | { kind: "edit"; id: string | null; prefill?: { content: string } };
+  | { kind: "edit"; id: string | null; projectId?: string; prefill?: { content: string } }
+  | { kind: "project"; id: string };
 
 export default function LibraryTab() {
   const textsLoaded = useLibraryStore((s) => s.textsLoaded);
@@ -39,6 +41,7 @@ export default function LibraryTab() {
       return (
         <LibraryEditor
           id={view.id}
+          projectId={view.projectId}
           initial={view.prefill}
           onBack={() =>
             view.id
@@ -46,6 +49,18 @@ export default function LibraryTab() {
               : setView({ kind: "list" })
           }
           onDone={(id) => setView({ kind: "read", id })}
+        />
+      );
+    case "project":
+      return (
+        <ProjectDetail
+          id={view.id}
+          onBack={() => setView({ kind: "list" })}
+          onOpenText={(id) => setView({ kind: "read", id })}
+          onEditText={(id) => setView({ kind: "edit", id, prefill: undefined })}
+          onNewText={(projectId) =>
+            setView({ kind: "edit", id: null, projectId, prefill: undefined })
+          }
         />
       );
     case "list":
@@ -56,6 +71,7 @@ export default function LibraryTab() {
           onNew={(prefill) =>
             setView({ kind: "edit", id: null, prefill })
           }
+          onOpenProject={(id) => setView({ kind: "project", id })}
         />
       );
   }

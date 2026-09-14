@@ -1,5 +1,5 @@
 import { saveJson, loadJson } from "@/utils/storage";
-import type { ThreadMeta } from "@/types";
+import type { ThreadMeta, LibraryTextMeta, ProjectMeta } from "@/types";
 
 /**
  * Backup & restore of all app data as a single JSON bundle.
@@ -25,6 +25,8 @@ const STATIC_FILE_NAMES = [
   "config.json",
   "settings.json",
   "zen-prices.json",
+  "library.json",
+  "projects.json",
 ] as const;
 
 /** Only these safe file names are accepted when restoring a backup. */
@@ -42,6 +44,23 @@ export async function buildBackupBundle(): Promise<BackupBundle> {
   const threads = (files["threads.json"] as ThreadMeta[] | undefined) ?? [];
   for (const thread of threads) {
     const name = `chat_${thread.id}.json`;
+    const data = await loadJson<unknown>(name);
+    if (data != null) files[name] = data;
+  }
+
+  // One content + versions file per library text
+  const texts = (files["library.json"] as LibraryTextMeta[] | undefined) ?? [];
+  for (const text of texts) {
+    for (const name of [`text_${text.id}.json`, `text_${text.id}.versions.json`]) {
+      const data = await loadJson<unknown>(name);
+      if (data != null) files[name] = data;
+    }
+  }
+
+  // One brief file per project
+  const projects = (files["projects.json"] as ProjectMeta[] | undefined) ?? [];
+  for (const project of projects) {
+    const name = `project_${project.id}.json`;
     const data = await loadJson<unknown>(name);
     if (data != null) files[name] = data;
   }

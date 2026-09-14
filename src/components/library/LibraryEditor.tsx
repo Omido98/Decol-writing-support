@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { useProjectStore } from "@/stores/projectStore";
 import { textTypeLabel, type TextTypeId } from "@/types";
 import { wordCount } from "@/utils/tokens";
 import { Button } from "@/components/ui/button";
@@ -26,12 +27,15 @@ const TEXT_TYPE_IDS: TextTypeId[] = [
 
 export default function LibraryEditor({
   id,
+  projectId: initialProjectId,
   initial,
   onDone,
   onBack,
 }: {
   /** Existing text id, or null when creating a new text. */
   id: string | null;
+  /** Project a new text should belong to (e.g. created from a project page). */
+  projectId?: string;
   /** Prefill for a new text (e.g. pasted from the clipboard). */
   initial?: { title?: string; folder?: string; content?: string };
   onDone: (id: string) => void;
@@ -40,6 +44,9 @@ export default function LibraryEditor({
   const texts = useLibraryStore((s) => s.texts);
   const createText = useLibraryStore((s) => s.createText);
   const updateText = useLibraryStore((s) => s.updateText);
+  const projects = useProjectStore((s) => s.projects);
+  const projectsLoaded = useProjectStore((s) => s.projectsLoaded);
+  const loadProjects = useProjectStore((s) => s.loadProjects);
 
   const existing = id ? (texts.find((t) => t.id === id) ?? null) : null;
 
@@ -52,8 +59,15 @@ export default function LibraryEditor({
   const [folder, setFolder] = useState(
     existing?.folder ?? initial?.folder ?? "",
   );
+  const [projectId, setProjectId] = useState<string>(
+    existing?.projectId ?? initialProjectId ?? "",
+  );
   const [content, setContent] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!projectsLoaded) void loadProjects();
+  }, [projectsLoaded, loadProjects]);
 
   // Load existing content once per text id.
   useEffect(() => {
@@ -86,6 +100,7 @@ export default function LibraryEditor({
         title: title.trim() || "Untitled text",
         textType,
         folder: folder.trim(),
+        projectId,
         content,
       });
       setSaving(false);
@@ -95,6 +110,7 @@ export default function LibraryEditor({
         title: title.trim() || "Untitled text",
         textType,
         folder: folder.trim() || undefined,
+        projectId: projectId || undefined,
         content,
       });
       setSaving(false);
@@ -148,6 +164,30 @@ export default function LibraryEditor({
                   {TEXT_TYPE_IDS.map((t) => (
                     <SelectItem key={t} value={t}>
                       {textTypeLabel(t)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5 flex-1">
+              <Label className="text-text-secondary text-xs">Project (optional)</Label>
+              <Select
+                value={projectId || "none"}
+                onValueChange={(v) => setProjectId(v == null || v === "none" ? "" : v)}
+              >
+                <SelectTrigger className="w-full bg-field h-9">
+                  <SelectValue>
+                    {projectId
+                      ? (projects.find((p) => p.id === projectId)?.title ??
+                        "Unknown project")
+                      : "Standalone"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Standalone</SelectItem>
+                  {projects.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      <span className="truncate max-w-[240px] block">{p.title}</span>
                     </SelectItem>
                   ))}
                 </SelectContent>

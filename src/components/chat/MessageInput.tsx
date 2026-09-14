@@ -1,9 +1,11 @@
-import { useRef, useCallback, type KeyboardEvent } from "react";
+import { useRef, useCallback, type ChangeEvent, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { BookMarked, Send, Square, X } from "lucide-react";
+import { BookMarked, FileText, FolderOpen, Loader2, Paperclip, Send, Square, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTokenEstimate, TOKEN_WARN_THRESHOLD } from "@/utils/tokens";
+import { UPLOAD_ACCEPT } from "@/utils/fileParse";
 import type { AttachedLibraryText } from "@/types";
+import type { FileAttachment } from "@/stores/chatStore";
 import { textTypeLabel } from "@/types";
 
 interface MessageInputProps {
@@ -20,6 +22,20 @@ interface MessageInputProps {
   onOpenPicker?: () => void;
   /** Removes an attached library text. */
   onRemoveAttachment?: (id: string) => void;
+  /** Extracted text of uploaded documents on the next send. */
+  fileAttachments?: FileAttachment[];
+  /** Handles chosen files (parse + attach). */
+  onUploadFiles?: (files: FileList) => void;
+  /** Removes an uploaded document by name. */
+  onRemoveFileAttachment?: (name: string) => void;
+  /** Whether an upload is currently being parsed. */
+  uploadingFiles?: boolean;
+  /** The project this thread writes in, when any. */
+  projectTitle?: string | null;
+  /** Whether the project brief is included in the next send. */
+  projectBriefIncluded?: boolean;
+  /** Toggles project brief inclusion. */
+  onToggleProjectBrief?: () => void;
 }
 
 export default function MessageInput({
@@ -32,8 +48,16 @@ export default function MessageInput({
   attachedTexts = [],
   onOpenPicker,
   onRemoveAttachment,
+  fileAttachments = [],
+  onUploadFiles,
+  onRemoveFileAttachment,
+  uploadingFiles = false,
+  projectTitle = null,
+  projectBriefIncluded = true,
+  onToggleProjectBrief,
 }: MessageInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // While the AI is generating, the input is disabled and the send button
   // turns into a stop button.
@@ -51,19 +75,57 @@ export default function MessageInput({
     }
   };
 
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length && onUploadFiles) onUploadFiles(e.target.files);
+    // Reset so choosing the same file again still fires a change event.
+    e.target.value = "";
+  };
+
   // Auto-resize textarea (max 4 lines ≈ 4 * 1.5rem = 6rem ≈ 96px)
-  const handleInput = useCallback(() => {
+  const autoResize = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 96) + "px";
   }, []);
 
+  const hasChips =
+    projectTitle != null ||
+    attachedTexts.length > 0 ||
+    fileAttachments.length > 0;
+
   return (
     <div className="border-t border-border bg-background">
-      {/* Attached library texts */}
-      {attachedTexts.length > 0 && (
+      {/* Project brief toggle + attached contexts */}
+      {hasChips && (
         <div className="flex items-center gap-1.5 px-4 pt-3 flex-wrap">
+          {projectTitle != null && onToggleProjectBrief && (
+            <button
+              type="button"
+              onClick={onToggleProjectBrief}
+              disabled={disabled}
+              title={
+                projectBriefIncluded
+                  ? "Project brief is included in the next send. Click to exclude it."
+                  : "Project brief is excluded. Click to include it."
+              }
+              className={cn(
+                "flex items-center gap-1.5 rounded-full border pl-2.5 pr-1 py-1 text-xs max-w-[280px] transition-colors disabled:opacity-50",
+                projectBriefIncluded
+                  ? "bg-primary/10 border-primary/40 text-text-primary"
+                  : "bg-surface border-border text-text-muted line-through",
+              )}
+            >
+              <FolderOpen
+                className={cn(
+                  "size-3 shrink-0",
+                  projectBriefIncluded ? "text-primary" : "text-text-muted",
+                )}
+              />
+              <span className="truncate">Brief: {projectTitle}</span>
+              {!projectBriefIncluded && <X className="size-3 shrink-0" />}
+            </button>
+          )}
           {attachedTexts.map((t) => (
             <span
               key={t.id}
@@ -89,10 +151,63 @@ export default function MessageInput({
               )}
             </span>
           ))}
+          {fileAttachments.map((f) => (
+            <span
+              key={f.name}
+              className="flex items-center gap-1.5 rounded-full bg-surface border border-border pl-2.5 pr-1 py-1 text-xs text-text-secondary max-w-[280px]"
+            >
+              <FileText className="size-3 shrink-0 text-primary" />
+              <span className="truncate text-text-primary" title={f.name}>
+                {f.name}
+              </span>
+              <span className="shrink-0 text-text-muted">
+                {(f.wordCount ?? 0).toLocaleString()} words
+              </span>
+              {onRemoveFileAttachment && (
+                <button
+                  type="button"
+                  onClick={() => onRemoveFileAttachment(f.name)}
+                  className="shrink-0 rounded-full p-0.5 hover:bg-border transition-colors"
+                  title={`Remove ${f.name}`}
+                  aria-label={`Remove ${f.name}`}
+                >
+                  <X className="size-3" />
+                </button>
+              )}
+            </span>
+          ))}
         </div>
       )}
 
       <div className="flex items-end gap-2 p-4">
+        {onUploadFiles && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={UPLOAD_ACCEPT}
+              onChange={handleFileChange}
+              className="hidden"
+              aria-hidden="true"
+            />
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={disabled || uploadingFiles}
+              title="Upload Word or Excel files"
+              aria-label="Upload Word or Excel files"
+              className="shrink-0"
+            >
+              {uploadingFiles ? (
+                <Loader2 className="size-4 animate-spin text-text-secondary" />
+              ) : (
+                <Paperclip className="size-4 text-text-secondary" />
+              )}
+            </Button>
+          </>
+        )}
         {onOpenPicker && (
           <Button
             variant="outline"
@@ -112,7 +227,7 @@ export default function MessageInput({
           onChange={(e) => {
             onChange(e.target.value);
             // Defer height reset to ensure DOM is updated
-            requestAnimationFrame(handleInput);
+            requestAnimationFrame(autoResize);
           }}
           onKeyDown={handleKeyDown}
           placeholder="Type your message… (Enter to send, Shift+Enter for new line)"

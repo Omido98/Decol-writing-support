@@ -18,6 +18,7 @@ export default function AttachmentPicker({
   onOpenChange,
   selectedIds,
   onConfirm,
+  projectId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -25,6 +26,8 @@ export default function AttachmentPicker({
   selectedIds: string[];
   /** Called with the full selection when the user confirms. */
   onConfirm: (ids: string[]) => void;
+  /** When set, only this project's texts are offered. */
+  projectId?: string;
 }) {
   const texts = useLibraryStore((s) => s.texts);
   const textsLoaded = useLibraryStore((s) => s.textsLoaded);
@@ -42,7 +45,10 @@ export default function AttachmentPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, textsLoaded, loadTexts]);
 
-  const filtered = texts.filter((t) =>
+  const candidates = projectId
+    ? texts.filter((t) => t.projectId === projectId)
+    : texts;
+  const filtered = candidates.filter((t) =>
     search.trim()
       ? t.title.toLowerCase().includes(search.trim().toLowerCase())
       : true,
@@ -80,10 +86,11 @@ export default function AttachmentPicker({
         </div>
 
         <div className="max-h-[300px] overflow-y-auto rounded-lg border border-border divide-y divide-border">
-          {textsLoaded && texts.length === 0 ? (
+          {textsLoaded && candidates.length === 0 ? (
             <p className="text-sm text-text-muted px-4 py-6 text-center">
-              Your library is empty. Save texts from the chat or add them in
-              the Library tab first.
+              {projectId
+                ? "This project has no texts yet. Write the first one from the project page."
+                : "Your library is empty. Save texts from the chat or add them in the Library tab first."}
             </p>
           ) : (
             filtered.map((t) => (

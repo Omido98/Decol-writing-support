@@ -14,6 +14,8 @@ import {
   Sparkles,
   Loader2,
   BookmarkPlus,
+  FileText,
+  FolderOpen,
 } from "lucide-react";
 
 function LoadingDots() {
@@ -29,11 +31,17 @@ function LoadingDots() {
 export default function MessageList({
   onResend,
   onRegenerate,
+  saveToProjectId,
+  onSaveAsBrief,
 }: {
   /** Re-send a failed user message in place (no duplicate is created). */
   onResend?: (key: string) => void;
   /** Regenerate the latest assistant message, replacing it in place. */
   onRegenerate?: (key: string) => void;
+  /** Project that "Save to Library" should file texts into, when any. */
+  saveToProjectId?: string | null;
+  /** Save an assistant reply as the linked project's brief (project threads). */
+  onSaveAsBrief?: (content: string) => void;
 }) {
   const messages = useChatStore((s) => s.messages);
   const isSending = useChatStore((s) => s.isSending);
@@ -52,6 +60,7 @@ export default function MessageList({
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
+  const [briefSavedId, setBriefSavedId] = useState<string | null>(null);
   const [deslopPendingId, setDeslopPendingId] = useState<string | null>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -123,9 +132,16 @@ export default function MessageList({
         threadTitle && threadTitle !== "Untitled conversation"
           ? threadTitle
           : "Saved from chat",
+      ...(saveToProjectId ? { projectId: saveToProjectId } : {}),
       content,
     });
     flashFeedback(msgId, setSavedId);
+  };
+
+  const handleSaveAsBrief = (msgId: string, content: string) => {
+    if (!content.trim() || !onSaveAsBrief) return;
+    onSaveAsBrief(content);
+    flashFeedback(msgId, setBriefSavedId);
   };
 
   const handleDeslop = async (msgId: string, content: string) => {
@@ -147,20 +163,6 @@ export default function MessageList({
     }
   };
 
-  if (messages.length === 0 && !isSending) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center max-w-md space-y-4">
-          <p className="text-text-muted text-sm">
-            Send a message to start the conversation. The AI is your writing
-            partner for decolonial and anti-colonial texts — drafting,
-            revising, and rethinking together with you.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div
       ref={containerRef}
@@ -175,7 +177,9 @@ export default function MessageList({
             ? "copied"
             : savedId === key
               ? "saved"
-              : null;
+              : briefSavedId === key
+                ? "brief saved"
+                : null;
         return (
           <div
             key={key}
@@ -208,7 +212,22 @@ export default function MessageList({
               )}
             >
               {isUser ? (
-                <p>{msg.content}</p>
+                <>
+                  {msg.fileAttachments && msg.fileAttachments.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mb-1.5">
+                      {msg.fileAttachments.map((f) => (
+                        <span
+                          key={f.name}
+                          className="flex items-center gap-1 rounded-full bg-primary-foreground/15 px-2 py-0.5 text-[11px]"
+                        >
+                          <FileText className="size-3" />
+                          {f.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <p>{msg.content}</p>
+                </>
               ) : (
                 <div className="chat-markdown prose prose-sm max-w-none dark:prose-invert">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -245,6 +264,25 @@ export default function MessageList({
                     <Copy className="size-3.5" />
                   )}
                 </button>
+                {onSaveAsBrief && (
+                  <button
+                    type="button"
+                    onClick={() => handleSaveAsBrief(key, msg.content)}
+                    className="text-text-muted hover:text-primary transition-colors"
+                    title={
+                      feedback === "brief saved"
+                        ? "Saved as project brief!"
+                        : "Save as project brief"
+                    }
+                    aria-label="Save as project brief"
+                  >
+                    {feedback === "brief saved" ? (
+                      <Check className="size-3.5 text-green-400" />
+                    ) : (
+                      <FolderOpen className="size-3.5" />
+                    )}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => void handleSaveToLibrary(key, msg.content)}

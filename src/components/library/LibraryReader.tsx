@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { useProjectStore } from "@/stores/projectStore";
 import { useAppStore } from "@/stores/useAppStore";
 import { exportText } from "@/utils/libraryIo";
 import { textTypeLabel } from "@/types";
@@ -21,6 +22,7 @@ import {
   Check,
   Copy,
   Download,
+  FolderOpen,
   History,
   Pencil,
   Trash2,
@@ -47,6 +49,9 @@ export default function LibraryReader({
   const loadTextContent = useLibraryStore((s) => s.loadTextContent);
   const requestAttach = useLibraryStore((s) => s.requestAttach);
   const deleteText = useLibraryStore((s) => s.deleteText);
+  const projects = useProjectStore((s) => s.projects);
+  const projectsLoaded = useProjectStore((s) => s.projectsLoaded);
+  const loadProjects = useProjectStore((s) => s.loadProjects);
   const setActiveTab = useAppStore((s) => s.setActiveTab);
 
   const [content, setContent] = useState<string | null>(null);
@@ -54,6 +59,10 @@ export default function LibraryReader({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!projectsLoaded) void loadProjects();
+  }, [projectsLoaded, loadProjects]);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,6 +118,14 @@ export default function LibraryReader({
           <span className="shrink-0 px-2 py-0.5 rounded-full bg-surface-alt border border-border text-[11px] font-medium text-text-secondary">
             {textTypeLabel(meta.textType)}
           </span>
+          {meta.projectId && (
+            <span className="shrink-0 px-2 py-0.5 rounded-full bg-primary/10 border border-primary/30 text-[11px] font-medium text-text-primary flex items-center gap-1 max-w-[200px]">
+              <FolderOpen className="size-3 shrink-0" />
+              <span className="truncate">
+                {projects.find((p) => p.id === meta.projectId)?.title ?? "Project"}
+              </span>
+            </span>
+          )}
           {meta.folder && (
             <span className="shrink-0 px-2 py-0.5 rounded-full bg-surface-alt border border-border text-[11px] font-medium text-text-secondary">
               {meta.folder}

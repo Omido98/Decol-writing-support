@@ -9,6 +9,7 @@ import {
 } from "@/stores/settingsStore";
 import { flushChatSave } from "@/stores/chatStore";
 import { flushLibrarySave } from "@/stores/libraryStore";
+import { flushProjectSave } from "@/stores/projectStore";
 import LibraryTab from "@/components/library/LibraryTab";
 import ChatTab from "@/components/tabs/ChatTab";
 import SettingsDialog from "@/components/settings/SettingsDialog";
@@ -24,6 +25,7 @@ const tabs: { id: TabId; label: string }[] = [
 function flushPendingSaves() {
   void flushChatSave();
   void flushLibrarySave();
+  void flushProjectSave();
 }
 
 function App() {
@@ -52,7 +54,7 @@ function App() {
         const win = getCurrentWindow();
           unlisten = await win.onCloseRequested(async (event) => {
             event.preventDefault();
-            await Promise.all([flushChatSave(), flushLibrarySave()]);
+            await Promise.all([flushChatSave(), flushLibrarySave(), flushProjectSave()]);
           try {
             await win.destroy();
           } catch {

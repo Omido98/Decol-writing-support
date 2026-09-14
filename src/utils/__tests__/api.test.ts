@@ -23,6 +23,7 @@ const baseConfig: ApiConfig = {
   deepResearchEnabled: false,
   systemPromptMode: "standard",
   customSystemPrompt: "",
+  lastBrief: null,
 };
 
 const deepConfig: ApiConfig = {
