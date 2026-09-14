@@ -27,7 +27,7 @@ export default function ChatSettings({
   const setConfig = useChatStore((s) => s.setConfig);
 
   const [webSearchEnabled, setWebSearchEnabled] = useState(
-    config.webSearchEnabled ?? false,
+    config.webSearchEnabled ?? true,
   );
   const [deepResearchEnabled, setDeepResearchEnabled] = useState(
     config.deepResearchEnabled ?? false,
@@ -42,7 +42,7 @@ export default function ChatSettings({
   const standardPrompt = useMemo(() => getStandardPrompt(), []);
 
   useEffect(() => {
-    setWebSearchEnabled(config.webSearchEnabled ?? false);
+    setWebSearchEnabled(config.webSearchEnabled ?? true);
     setDeepResearchEnabled(config.deepResearchEnabled ?? false);
     setPromptMode(config.systemPromptMode ?? "standard");
     setCustomPrompt(config.customSystemPrompt ?? "");

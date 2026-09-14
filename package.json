@@ -1,7 +1,7 @@
 {
   "name": "decol-writing-support",
   "private": true,
-  "version": "0.0.3",
+  "version": "0.0.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -29,6 +29,7 @@
     "clsx": "^2.1.1",
     "lucide-react": "^1.27.0",
     "mammoth": "^1.12.3",
+    "pdfjs-dist": "^6.3.289",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",

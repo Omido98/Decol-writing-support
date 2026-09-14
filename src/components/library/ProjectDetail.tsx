@@ -88,6 +88,7 @@ export default function ProjectDetail({
   const [defaultTone, setDefaultTone] = useState<string>("none");
   const [defaultCitations, setDefaultCitations] = useState<string>("none");
   const [defaultLanguage, setDefaultLanguage] = useState("");
+  const [references, setReferences] = useState("");
 
   const memberTexts = texts
     .filter((t) => t.projectId === id)
@@ -124,6 +125,7 @@ export default function ProjectDetail({
     setDefaultTone(project.defaultTone ?? "none");
     setDefaultCitations(project.defaultCitations ?? "none");
     setDefaultLanguage(project.defaultLanguage ?? "");
+    setReferences(project.references ?? "");
     setEditOpen(true);
   };
 
@@ -136,6 +138,7 @@ export default function ProjectDetail({
       defaultCitations:
         defaultCitations === "none" ? null : (defaultCitations as CitationId),
       defaultLanguage: defaultLanguage.trim() || null,
+      references: references.trim(),
     });
     setEditOpen(false);
   };
@@ -440,6 +443,20 @@ export default function ProjectDetail({
                   className="bg-field"
                 />
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="project-references">References</Label>
+              <Textarea
+                id="project-references"
+                value={references}
+                onChange={(e) => setReferences(e.target.value)}
+                placeholder="Links, authors, books, theories the project builds on…"
+                className="bg-field min-h-[96px] resize-y"
+              />
+              <p className="text-xs text-text-muted">
+                Given to the chat agent as source material in every
+                conversation of this project.
+              </p>
             </div>
           </div>
           <DialogFooter>
