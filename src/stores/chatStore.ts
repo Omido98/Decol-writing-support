@@ -74,7 +74,7 @@ const defaultApiConfig: ApiConfig = {
   apiKey: "",
   model: "deepseek-v4-flash-free",
   reasoningEffort: null,
-  webSearchEnabled: false,
+  webSearchEnabled: true,
   deepResearchEnabled: false,
   systemPromptMode: "standard",
   customSystemPrompt: "",
@@ -202,6 +202,11 @@ interface ChatState {
    * persist it. Only possible while the thread has no messages yet.
    */
   setThreadMode: (mode: ThreadMode, projectId?: string) => Promise<void>;
+  /**
+   * Set (or clear) the free-text references of the active thread and
+   * persist them in threads.json.
+   */
+  setThreadReferences: (references: string) => Promise<void>;
 
   // Thread actions
   /** Load the thread list from disk; repair an active thread that vanished. */
@@ -307,6 +312,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
     await saveJson("threads.json", get().threads);
     scheduleThreadSave();
+  },
+
+  setThreadReferences: async (references) => {
+    const s = get();
+    if (!s.activeThreadId) return;
+    const value = references.trim();
+    set((state) => ({
+      threads: state.threads.map((t) =>
+        t.id === state.activeThreadId
+          ? { ...t, references: value || undefined, updatedAt: new Date().toISOString() }
+          : t,
+      ),
+    }));
+    await saveJson("threads.json", get().threads);
   },
 
   // ── Threads ──
@@ -439,7 +458,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ...data,
           apiKey: keychainKey ?? data.apiKey ?? "",
           reasoningEffort: data.reasoningEffort ?? null,
-          webSearchEnabled: data.webSearchEnabled ?? false,
+          webSearchEnabled: data.webSearchEnabled ?? true,
           deepResearchEnabled: data.deepResearchEnabled ?? false,
           systemPromptMode: data.systemPromptMode ?? "standard",
           customSystemPrompt: data.customSystemPrompt ?? "",

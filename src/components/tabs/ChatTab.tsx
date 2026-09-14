@@ -34,7 +34,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { AttachedLibraryText, ThreadMode, WritingBrief } from "@/types";
+import type {
+  AttachedLibraryText,
+  ProjectMeta,
+  ThreadMeta,
+  ThreadMode,
+  WritingBrief,
+} from "@/types";
 import { composeBriefMessage, defaultBrief } from "@/utils/brief";
 import {
   BookMarked,
@@ -50,6 +56,33 @@ import BriefForm from "@/components/chat/BriefForm";
 interface ChatTabProps {
   /** Opens the general Settings dialog (used to configure the API). */
   onOpenSettings: () => void;
+}
+
+/**
+ * Collect the reference entries for a thread: its own free-text
+ * references plus, when linked, its project's. Used for both the token
+ * estimate and the actual send, so the two always agree.
+ */
+function collectReferences(
+  thread: ThreadMeta | null | undefined,
+  project: ProjectMeta | null | undefined,
+): { source: string; content: string }[] {
+  const refs: { source: string; content: string }[] = [];
+  const threadRefs = thread?.references?.trim();
+  if (threadRefs) {
+    refs.push({
+      source: "References for this text (provided before the chat started)",
+      content: threadRefs,
+    });
+  }
+  const projectRefs = project?.references?.trim();
+  if (projectRefs) {
+    refs.push({
+      source: `References of project “${project!.title}”`,
+      content: projectRefs,
+    });
+  }
+  return refs;
 }
 
 /** Empty-thread picker: what should this conversation do? */
@@ -242,9 +275,17 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
     [messages],
   );
 
+  /** Reference entries for the active thread: its own + the project's. */
+  const activeReferences = useMemo(
+    () => collectReferences(activeThread, threadProject),
+    [activeThread, threadProject],
+  );
+
   const tokenEstimate = useMemo(() => {
     const prompt = isProjectThread
-      ? buildProjectBriefPrompt()
+      ? buildProjectBriefPrompt({
+          references: threadProject?.references ?? null,
+        })
       : buildSystemPrompt({
           mode: config.systemPromptMode ?? "standard",
           customPrompt: config.customSystemPrompt ?? "",
@@ -258,6 +299,7 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
           projectBriefContent:
             threadProjectId && projectBriefIncluded ? projectBriefContent : null,
           uploadedFiles: threadFiles,
+          references: activeReferences,
         });
     const historyText = messages.map((m) => m.content).join("\n");
     return estimateTokens(`${prompt}\n${historyText}\n${inputValue}`);
@@ -274,6 +316,8 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
     projectBriefIncluded,
     projectBriefContent,
     threadFiles,
+    activeReferences,
+    threadProject,
   ]);
 
   // ── Input state ──
@@ -285,12 +329,15 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   const [briefDraft, setBriefDraft] = useState<WritingBrief | null>(null);
 
   // ── Text-mode start: project selection is derived (textProjectChoice) ──
+  // Free-text references the user gives before the text thread starts.
+  const [startReferences, setStartReferences] = useState("");
 
   // ── Project-mode start: seed form ──
   const [projectChoice, setProjectChoice] = useState<string>("__new__");
   const [seedTitle, setSeedTitle] = useState("");
   const [seedDescription, setSeedDescription] = useState("");
   const [seedIdeas, setSeedIdeas] = useState("");
+  const [seedReferences, setSeedReferences] = useState("");
 
   // Aborts the in-flight generation (used by the Stop button / Escape).
   const controllerRef = useRef<AbortController | null>(null);
@@ -348,8 +395,20 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
     setSeedTitle("");
     setSeedDescription("");
     setSeedIdeas("");
+    setStartReferences("");
+    setSeedReferences("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeThreadId]);
+
+  // ── Prefill the seed references when an existing project is chosen ──
+  useEffect(() => {
+    if (projectChoice === "__new__") {
+      setSeedReferences("");
+      return;
+    }
+    const project = projects.find((p) => p.id === projectChoice);
+    setSeedReferences(project?.references ?? "");
+  }, [projectChoice, projects]);
 
   // ── Stop generation (Stop button / Escape key) ──
   const handleStop = useCallback(() => {
@@ -443,8 +502,15 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
       const sendProjectId = sendThread?.projectId ?? null;
 
       let systemPrompt: string;
+      const sendProject = sendProjectId
+        ? useProjectStore
+            .getState()
+            .projects.find((p) => p.id === sendProjectId)
+        : null;
       if (sendMode === "project") {
-        systemPrompt = buildProjectBriefPrompt();
+        systemPrompt = buildProjectBriefPrompt({
+          references: sendProject?.references ?? null,
+        });
       } else {
         let sendBriefContent = "";
         if (sendProjectId && (briefIncludedByThread[sendProjectId] ?? true)) {
@@ -464,6 +530,7 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
           })),
           projectBriefContent: sendBriefContent || null,
           uploadedFiles: state.messages.flatMap((m) => m.fileAttachments ?? []),
+          references: collectReferences(sendThread, sendProject),
         });
       }
 
@@ -569,12 +636,17 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   // ── Start a text thread from the writing brief ──
   // The composed brief becomes the first (structured) user message; the
   // brief is also remembered as the default for new threads.
-  const handleStart = useCallback(() => {
+  const handleStart = useCallback(async () => {
     const b = brief ?? defaultBrief();
     if (!b.topic.trim() || isSending) return;
+    // Persist the start-panel references on the thread before the first
+    // send, so the send picks them up from the thread metadata.
+    if (startReferences.trim()) {
+      await useChatStore.getState().setThreadReferences(startReferences);
+    }
     void setConfig({ lastBrief: b });
     void sendText({ text: composeBriefMessage(b) });
-  }, [brief, isSending, sendText, setConfig]);
+  }, [brief, isSending, sendText, setConfig, startReferences]);
 
   // ── Save an edited brief mid-thread ──
   const handleBriefSave = useCallback(() => {
@@ -619,9 +691,19 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
     if (projectChoice === "__new__") {
       const title = seedTitle.trim();
       if (!title) return;
-      projectId = await useProjectStore.getState().createProject({ title });
+      projectId = await useProjectStore.getState().createProject({
+        title,
+        ...(seedReferences.trim() ? { references: seedReferences } : {}),
+      });
     } else {
       projectId = projectChoice;
+      // Only overwrite the project's references when the user typed
+      // something; an untouched box keeps the stored value.
+      if (seedReferences.trim()) {
+        await useProjectStore.getState().updateProject(projectId, {
+          references: seedReferences.trim(),
+        });
+      }
     }
     const project = useProjectStore
       .getState()
@@ -640,7 +722,7 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
       }
     }
     void sendText({ text });
-  }, [isSending, projectChoice, seedTitle, seedDescription, seedIdeas, setThreadMode, sendText]);
+  }, [isSending, projectChoice, seedTitle, seedDescription, seedIdeas, seedReferences, setThreadMode, sendText]);
 
   // ── Save an assistant reply as the linked project's brief ──
   const handleSaveAsBrief = useCallback(
@@ -905,6 +987,20 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
                   className="bg-field min-h-[72px] resize-y"
                 />
               </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="project-seed-references">References (optional)</Label>
+                <Textarea
+                  id="project-seed-references"
+                  value={seedReferences}
+                  onChange={(e) => setSeedReferences(e.target.value)}
+                  placeholder="Links, authors, books, theories the project builds on…"
+                  className="bg-field min-h-[72px] resize-y"
+                />
+                <p className="text-xs text-text-muted">
+                  Saved with the project and given to the agent in every
+                  conversation of this project.
+                </p>
+              </div>
               <Button
                 className="bg-primary hover:bg-primary/80 text-primary-foreground"
                 onClick={() => void handleProjectStart()}
@@ -953,6 +1049,23 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
                   {threadProject.description}
                 </p>
               )}
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="text-references">References (optional)</Label>
+              <Textarea
+                id="text-references"
+                value={startReferences}
+                onChange={(e) => setStartReferences(e.target.value)}
+                placeholder="Links, authors, books, theories this text should draw on…"
+                className="bg-field min-h-[72px] resize-y"
+              />
+              <p className="text-xs text-text-muted">
+                Paste sources, names, or links. The agent grounds the text in
+                them and reads linked pages before relying on them.
+                {threadProject?.references?.trim()
+                  ? " The project's references are included automatically."
+                  : ""}
+              </p>
             </div>
             <BriefForm
               brief={brief ?? defaultBrief()}

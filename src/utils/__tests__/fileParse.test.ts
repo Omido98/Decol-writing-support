@@ -12,7 +12,7 @@ describe("fileParse", () => {
     expect(isSupportedUpload("table.csv")).toBe(true);
     expect(isSupportedUpload("notes.txt")).toBe(true);
     expect(isSupportedUpload("notes.md")).toBe(true);
-    expect(isSupportedUpload("scan.pdf")).toBe(false);
+    expect(isSupportedUpload("scan.pdf")).toBe(true);
     expect(isSupportedUpload("image.png")).toBe(false);
     expect(isSupportedUpload("old.doc")).toBe(false);
   });
@@ -36,7 +36,9 @@ describe("fileParse", () => {
   });
 
   it("throws for unsupported file types", async () => {
-    const file = new File(["%PDF-1.4"], "scan.pdf", { type: "application/pdf" });
+    const file = new File([new Uint8Array([0, 1, 2])], "image.png", {
+      type: "image/png",
+    });
     await expect(parseFile(file)).rejects.toThrow(/Unsupported/);
   });
 

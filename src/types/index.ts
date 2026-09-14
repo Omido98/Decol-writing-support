@@ -13,6 +13,11 @@ export interface ThreadMeta {
   mode?: ThreadMode;
   /** Project the thread is linked to (brief agent or text-in-project). */
   projectId?: string;
+  /**
+   * Free-text reference material the user gave before the chat started
+   * (links, authors, books, theories). Included in every send.
+   */
+  references?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -227,6 +232,11 @@ export interface ProjectMeta {
   defaultCitations?: CitationId;
   /** Default language texts of this project inherit. */
   defaultLanguage?: string;
+  /**
+   * Free-text reference material for the whole project (links, authors,
+   * books, theories): included in every send of the project's threads.
+   */
+  references?: string;
   /** Cached word count of the brief, for the project card. */
   briefWordCount?: number;
   createdAt: string;

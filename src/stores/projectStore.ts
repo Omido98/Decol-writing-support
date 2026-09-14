@@ -81,6 +81,7 @@ export interface ProjectState {
   createProject: (initial?: {
     title?: string;
     description?: string;
+    references?: string;
   }) => Promise<string>;
 
   /** Update a project's metadata (and brief meta when content is patched). */
@@ -94,6 +95,7 @@ export interface ProjectState {
       defaultTone?: ProjectMeta["defaultTone"] | null;
       defaultCitations?: ProjectMeta["defaultCitations"] | null;
       defaultLanguage?: string | null;
+      references?: string;
       briefContent?: string;
     },
   ) => Promise<void>;
@@ -136,6 +138,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       id,
       title: initial.title?.trim() || "Untitled project",
       ...(initial.description?.trim() ? { description: initial.description.trim() } : {}),
+      ...(initial.references?.trim() ? { references: initial.references.trim() } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -152,6 +155,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       patch.defaultTone !== undefined ||
       patch.defaultCitations !== undefined ||
       patch.defaultLanguage !== undefined ||
+      patch.references !== undefined ||
       patch.briefContent !== undefined;
 
     set((s) => ({
@@ -182,6 +186,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
                 ? patch.defaultLanguage
                   ? { defaultLanguage: patch.defaultLanguage }
                   : { defaultLanguage: undefined }
+                : {}),
+              ...(patch.references !== undefined
+                ? { references: patch.references }
                 : {}),
               ...(patch.briefContent !== undefined
                 ? briefDerivedMeta(patch.briefContent)
