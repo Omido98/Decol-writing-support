@@ -56,6 +56,12 @@ interface AppState extends ShellState {
   activeTab: "library" | "chat";
   setActiveTab: (tab: "library" | "chat") => void;
 
+  /** The last failed workspace action (e.g. starting a conversation) shown
+   * as a dismissible banner by the shell. Application state, never
+   * persisted: a failure deserves to be visible, not silent. */
+  actionError: string | null;
+  setActionError: (message: string | null) => void;
+
   setView: (view: WorkspaceView) => void;
   /** Open a project's page. */
   openProject: (id: string) => void;
@@ -126,6 +132,9 @@ function persistShell(state: ShellState) {
 export const useAppStore = create<AppState>((set, get) => ({
   ...DEFAULT_STATE,
   activeTab: "chat",
+  actionError: null,
+
+  setActionError: (actionError) => set({ actionError }),
 
   setActiveTab: (tab) => {
     // Legacy handoffs ("go to the chat tab") map onto workspace views and
@@ -178,26 +187,44 @@ export const useAppStore = create<AppState>((set, get) => ({
    */
   openDiscussion: (id) => {
     const chat = useChatStore.getState();
+    // A thread that cannot be loaded must not leave the click without a
+    // trace: the failure becomes a visible, dismissible banner.
+    const reportFailure = (err: unknown) => {
+      get().setActionError(
+        `Could not open a conversation: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    };
     if (id == null) {
       if (chat.activeThreadId) {
         get().setView({ kind: "discussion", id: chat.activeThreadId });
         return;
       }
       // The thread list decides (newest existing, or a fresh thread).
-      void chat.loadThreads().then(() => {
-        const active = useChatStore.getState().activeThreadId;
-        get().setView({ kind: "discussion", id: active });
-      });
+      void chat
+        .loadThreads()
+        .then(() => {
+          const active = useChatStore.getState().activeThreadId;
+          get().setView({ kind: "discussion", id: active });
+        })
+        .catch(reportFailure);
       return;
     }
     get().setView({ kind: "discussion", id });
-    void chat.switchThread(id).then((found) => {
-      if (found) return;
-      void chat.loadThreads().then(() => {
-        const active = useChatStore.getState().activeThreadId;
-        if (active !== id) get().setView({ kind: "discussion", id: active });
-      });
-    });
+    void chat
+      .switchThread(id)
+      .then((found) => {
+        if (found) return;
+        void chat
+          .loadThreads()
+          .then(() => {
+            const active = useChatStore.getState().activeThreadId;
+            if (active !== id) get().setView({ kind: "discussion", id: active });
+          })
+          .catch(reportFailure);
+      })
+      .catch(reportFailure);
   },
 
   setInspectorView: (inspectorView) => {

@@ -7,7 +7,15 @@ import WorkspaceStatusBar from "@/components/workspace/WorkspaceStatusBar";
 import CommandPalette from "@/components/workspace/CommandPalette";
 import SettingsDialog from "@/components/settings/SettingsDialog";
 import { Button } from "@/components/ui/button";
-import { PanelLeft, PanelRight, Settings, FolderOpen, Search } from "lucide-react";
+import {
+  CircleAlert,
+  PanelLeft,
+  PanelRight,
+  Settings,
+  FolderOpen,
+  Search,
+  X,
+} from "lucide-react";
 import { NAVIGATOR_WIDTH_RANGE, INSPECTOR_WIDTH_RANGE } from "@/stores/useAppStore";
 
 /** Below this centre width a side panel gives way to its rail/drawer. */
@@ -78,6 +86,9 @@ export default function WorkspaceShell() {
   const toggleNavigator = useAppStore((s) => s.toggleNavigator);
   const toggleInspector = useAppStore((s) => s.toggleInspector);
   const setView = useAppStore((s) => s.setView);
+
+  const actionError = useAppStore((s) => s.actionError);
+  const setActionError = useAppStore((s) => s.setActionError);
 
   const [showSettings, setShowSettings] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -255,6 +266,25 @@ export default function WorkspaceShell() {
       ref={shellRef}
       className="flex flex-col h-screen w-screen bg-background overflow-hidden"
     >
+      {/* Failed workspace action: visible, dismissible, never a dead click. */}
+      {actionError && (
+        <div
+          role="alert"
+          className="flex items-center gap-3 px-6 py-2 border-b border-border bg-surface-alt text-xs text-text-secondary shrink-0"
+        >
+          <CircleAlert className="size-4 shrink-0 text-destructive" />
+          <span className="flex-1 min-w-0 break-words">{actionError}</span>
+          <button
+            type="button"
+            className="shrink-0 text-text-muted hover:text-text-primary"
+            onClick={() => setActionError(null)}
+            aria-label="Dismiss error"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-1 min-h-0">
         {/* Left navigator: always mounted, hidden when collapsed/auto-hidden. */}
         <aside

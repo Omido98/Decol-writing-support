@@ -30,6 +30,7 @@ export default function CompactAssistant() {
   const operation = useThreadOperation(activeThreadId);
   const busy = !!operation;
   const openDiscussion = useAppStore((s) => s.openDiscussion);
+  const setActionError = useAppStore((s) => s.setActionError);
 
   const [configuring, setConfiguring] = useState(false);
 
@@ -95,7 +96,14 @@ export default function CompactAssistant() {
             void useChatStore
               .getState()
               .createThread()
-              .then((id) => openDiscussion(id));
+              .then((id) => openDiscussion(id))
+              .catch((err) =>
+                setActionError(
+                  `Could not start a conversation: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                ),
+              );
           }}
         >
           <MessageSquarePlus className="size-4 mr-1.5" />

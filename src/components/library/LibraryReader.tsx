@@ -133,18 +133,6 @@ export default function LibraryReader({
     };
   }, []);
 
-  if (!meta) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-3">
-        <p className="text-text-muted text-sm">This text no longer exists.</p>
-        <Button variant="outline" size="sm" onClick={onBack}>
-          <ArrowLeft className="size-4 mr-1" />
-          Back to library
-        </Button>
-      </div>
-    );
-  }
-
   /**
    * What the reader shows: markdown bodies render their source; rich
    * bodies render through the editor's own serializer (structure kept).
@@ -180,6 +168,22 @@ export default function LibraryReader({
     () => (documentJson ? collectFootnotesFromJson(documentJson) : []),
     [documentJson],
   );
+
+  // Every hook must run before this early return: a deleted text flips
+  // `meta` to null while the reader is still mounted, and a conditional
+  // hook call would crash React (blank window) instead of showing this
+  // fallback.
+  if (!meta) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3">
+        <p className="text-text-muted text-sm">This text no longer exists.</p>
+        <Button variant="outline" size="sm" onClick={onBack}>
+          <ArrowLeft className="size-4 mr-1" />
+          Back to library
+        </Button>
+      </div>
+    );
+  }
 
   const handleCopy = async () => {
     if (displayMarkdown == null) return;

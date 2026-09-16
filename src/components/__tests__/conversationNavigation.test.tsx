@@ -8,6 +8,7 @@ import {
   waitFor,
   cleanup,
   act,
+  within,
 } from "@testing-library/react";
 
 const storage: Record<string, string> = {};
@@ -185,6 +186,7 @@ beforeEach(() => {
     inspectorView: "assistant",
     focusMode: false,
     view: { kind: "list" },
+    actionError: null,
   });
   Object.defineProperty(window, "innerWidth", { value: 1400, configurable: true });
 });
@@ -321,6 +323,35 @@ describe("conversation navigation (B02)", () => {
         name: /send failed in this conversation/i,
       }),
     ).toHaveLength(1);
+  });
+
+  it("a failed conversation creation is reported instead of a dead click", async () => {
+    // Fresh state: no conversations exist yet, so the click must create one.
+    useChatStore.setState({
+      threads: [],
+      threadsLoaded: true,
+      activeThreadId: null,
+      threadLoaded: true,
+      messages: [],
+      error: null,
+      threadErrors: {},
+    });
+    const spy = vi
+      .spyOn(fakeRepository, "threadCreate")
+      .mockRejectedValue(new Error("the database is unreachable"));
+    try {
+      render(<WorkspaceShell />);
+      const navigator = screen.getByRole("navigation", {
+        name: "Workspace navigator",
+      });
+      fireEvent.click(
+        within(navigator).getByRole("button", { name: "New conversation" }),
+      );
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain("the database is unreachable");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("Configure API opens the real Settings dialog instead of navigating away", async () => {
