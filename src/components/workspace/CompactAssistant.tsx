@@ -1,13 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useChatStore } from "@/stores/chatStore";
 import { useAppStore } from "@/stores/useAppStore";
 import { sendChatMessage } from "@/services/chatSend";
 import { abortOperation } from "@/services/aiOperations";
 import { useThreadOperation } from "@/components/chat/useThreadOperation";
-import { usePreparedPreview } from "@/components/chat/usePreparedPreview";
-import WhatWillBeSent from "@/components/chat/WhatWillBeSent";
+import ChatComposer from "@/components/chat/ChatComposer";
 import MessageList from "@/components/chat/MessageList";
-import MessageInput from "@/components/chat/MessageInput";
 import { Button } from "@/components/ui/button";
 import { MessageSquarePlus } from "lucide-react";
 
@@ -39,13 +37,16 @@ export default function CompactAssistant() {
     if (!threadsLoaded) void loadThreads();
   }, [configLoaded, loadConfig, threadsLoaded, loadThreads]);
 
-  const draftValue = useChatStore(
-    (s) => s.drafts[s.activeThreadId ?? ""] ?? "",
-  );
-  const setDraft = useChatStore((s) => s.setDraft);
-  // The same prepared request the send uses: the compact surface
-  // discloses context, sources, and attachments too (B14).
-  const previewContext = usePreparedPreview();
+  const handleSend = useCallback((text: string) => {
+    void sendChatMessage({ text });
+  }, []);
+  // Stable callbacks for the memoized message list.
+  const handleResend = useCallback((key: string) => {
+    void sendChatMessage({ resendKey: key });
+  }, []);
+  const handleRegenerate = useCallback((key: string) => {
+    void sendChatMessage({ regenerateKey: key });
+  }, []);
 
   if (configuring) {
     return (
@@ -117,22 +118,10 @@ export default function CompactAssistant() {
     <div className="flex flex-col h-full min-h-0">
       <div className="flex-1 min-h-0 flex flex-col">
         <MessageList
-          onResend={(key) => void sendChatMessage({ resendKey: key })}
-          onRegenerate={(key) =>
-            void sendChatMessage({ regenerateKey: key })
-          }
+          onResend={handleResend}
+          onRegenerate={handleRegenerate}
         />
       </div>
-      {previewContext && (
-        <details className="px-3 border-t border-border shrink-0">
-          <summary className="cursor-pointer select-none py-1 text-[10px] text-text-muted hover:text-text-secondary">
-            What will be sent? ≈ {previewContext.tokenEstimate.toLocaleString()} tokens
-          </summary>
-          <div className="mb-2 rounded-lg border border-border bg-surface-alt p-2">
-            <WhatWillBeSent compiled={previewContext} />
-          </div>
-        </details>
-      )}
       {error && (
         <div
           role="alert"
@@ -149,10 +138,9 @@ export default function CompactAssistant() {
         </div>
       )}
       <div className="shrink-0">
-        <MessageInput
-          value={draftValue}
-          onChange={setDraft}
-          onSend={() => void sendChatMessage({ text: draftValue })}
+        <ChatComposer
+          compact
+          onSend={handleSend}
           onStop={operation ? () => abortOperation(operation.id) : undefined}
           disabled={busy || !threadLoaded}
         />
