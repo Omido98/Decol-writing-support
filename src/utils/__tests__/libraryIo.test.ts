@@ -84,4 +84,52 @@ describe("exportFilename", () => {
     const long = exportFilename("x".repeat(100));
     expect(long).toBe(`${"x".repeat(60)}.md`);
   });
+
+  it("exports distinct non-Latin titles instead of collapsing to text.md", () => {
+    expect(exportFilename("Ça — 東京")).toBe("ça-東京.md");
+    expect(exportFilename("Ça")).not.toBe(exportFilename("東京"));
+  });
+
+  it("keeps combining marks and never splits surrogate pairs", () => {
+    // e + combining acute stays composed (the mark is not punctuation).
+    expect(exportFilename("cle\u0301")).toBe("cle\u0301.md");
+    // Astral letters (surrogate PAIRS of UTF-16 code units, e.g. Deseret
+    // 𐐀) survive whole — splitting by code units would corrupt the name.
+    // (Lowercasing applies, as with any letter.)
+    const name = exportFilename("\u{10400}essay");
+    expect([...name.replace(".md", "")].length).toBe(6);
+    expect(name.endsWith("essay.md")).toBe(true);
+  });
+
+  it("prefixes Windows reserved device names", () => {
+    expect(exportFilename("CON")).toBe("_con.md");
+    expect(exportFilename("lpt1")).toBe("_lpt1.md");
+    // Longer names that merely contain a reserved word are fine.
+    expect(exportFilename("consent")).toBe("consent.md");
+  });
+});
+
+describe("import front-matter detection (R10)", () => {
+  it("does not swallow ordinary Markdown that begins with horizontal rules", () => {
+    const doc =
+      "---\nSome opening quote in horizontal-rule form.\n---\n\nBody text.";
+    const parsed = parseImport(doc, "fallback");
+    // The whole document is CONTENT (title/type untouched).
+    expect(parsed.content).toBe(doc);
+    expect(parsed.title).toBe("fallback");
+    expect(parsed.textType).toBe("other");
+  });
+
+  it("does not treat foreign YAML front matter as application metadata", () => {
+    const doc = "---\nauthor: someone\ndate: 2020-01-01\n---\n\nThe text.";
+    const parsed = parseImport(doc, "fallback");
+    expect(parsed.content).toBe(doc);
+  });
+
+  it("still parses the application's own front matter", () => {
+    const exported = serializeForExport(meta, "body");
+    const parsed = parseImport(exported, "fallback");
+    expect(parsed.title).toBe("On Epistemic Violence");
+    expect(parsed.content).toBe("body");
+  });
 });

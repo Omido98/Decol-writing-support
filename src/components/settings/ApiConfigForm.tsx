@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChatStore } from "@/stores/chatStore";
 import {
   PROVIDERS,
@@ -6,6 +6,7 @@ import {
   detectProviderFromKey,
   type ProviderId,
 } from "@/utils/providers";
+import { loadCredential, normalizeEndpoint } from "@/utils/keychain";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,7 +29,7 @@ import {
   ZEN_MODEL_NAMES,
   type ModelPrice,
 } from "@/utils/zenPricing";
-import { saveJson, loadJson } from "@/utils/storage";
+import { getPref, setPref } from "@/utils/preferences";
 import {
   RefreshCw,
   RotateCcw,
@@ -56,6 +57,10 @@ const REASONING_OPTIONS = [
 ];
 const inputClass =
   "bg-field text-text-primary border-border focus-visible:ring-primary/50 transition-[border-color,box-shadow] hover:border-primary/30";
+
+/** The normalized profile identity a credential belongs to. */
+const profileId = (provider: ProviderId, baseUrl: string): string =>
+  `${provider}|${normalizeEndpoint(baseUrl)}`;
 
 interface ApiConfigFormProps {
   onDone?: () => void;
@@ -111,6 +116,69 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
 
   const [pendingSelection, setPendingSelection] = useState<string | null>(null);
   const [confirmPaidOpen, setConfirmPaidOpen] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [sessionKeyNote, setSessionKeyNote] = useState(false);
+
+  /**
+   * Profile-bound key ownership (B17b): the editable key belongs to ONE
+   * normalized profile. `keyProfileRef` records which profile the field's
+   * content came from ("" while unresolved) and `keyResolved` gates the
+   * authenticated actions. Provider/endpoint changes clear the field
+   * SYNCHRONOUSLY in the handlers, so an immediate Test/Reload/Save can
+   * never send the previous profile's key to the new endpoint.
+   */
+  const keyProfileRef = useRef(
+    profileId(
+      config.provider ?? "zen",
+      config.baseUrl || getProvider(config.provider ?? "zen").defaultBaseUrl,
+    ),
+  );
+  const [keyResolved, setKeyResolved] = useState(true);
+  const keySeq = useRef(0);
+  const currentProfile = (p: ProviderId = provider, url: string = baseUrl) =>
+    profileId(p, url.trim() || getProvider(p).defaultBaseUrl);
+
+  /**
+   * Sequence guard: profile changes (provider switch, base-url edit) must
+   * discard stale model-list/test responses — a slow reply for the PREVIOUS
+   * profile may never update the UI for the new one.
+   */
+  const requestSeq = useRef(0);
+
+  // Connection-test status is bound to the current inputs: any change to
+  // the profile (provider, endpoint, key) invalidates the last result.
+  useEffect(() => {
+    setTestStatus("idle");
+    setTestMessage("");
+  }, [provider, baseUrl, apiKey]);
+
+  // Resolve the stored credential of the profile the form now shows. The
+  // handlers invalidate synchronously; this effect only LOADS (debounced,
+  // so typing an endpoint does not hit the keychain per keystroke) and
+  // then refreshes the model list with the resolved key.
+  useEffect(() => {
+    const url = baseUrl.trim() || getProvider(provider).defaultBaseUrl;
+    const target = profileId(provider, url);
+    if (keyProfileRef.current === target) return;
+    keySeq.current++; // any in-flight load belongs to a superseded profile
+    keyProfileRef.current = "";
+    setApiKey("");
+    setKeyResolved(false);
+    const timer = window.setTimeout(() => {
+      if (keyProfileRef.current === target) return; // a typed key settled it
+      const seq = ++keySeq.current;
+      void loadCredential(provider, url).then((cred) => {
+        if (seq !== keySeq.current) return; // a newer profile owns the state
+        if (keyProfileRef.current === target) return; // typed meanwhile
+        keyProfileRef.current = target;
+        setApiKey(cred ?? "");
+        setKeyResolved(true);
+        void loadModels(url, provider, cred ?? "");
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, baseUrl]);
 
   const fetchedPrices = useMemo(() => {
     const map: Record<string, ModelPrice> = {};
@@ -149,7 +217,8 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
     [models, pricing, provider],
   );
 
-  // Load the model list (and Zen prices when applicable) for a provider
+  /** Load the model list (and Zen prices when applicable) for a provider.
+   * Stale responses (profile changed meanwhile) are discarded. */
   const loadModels = useCallback(
     async (
       url: string,
@@ -157,13 +226,16 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
       key = apiKey.trim(),
     ): Promise<boolean> => {
       const target = url.trim() || getProvider(p).defaultBaseUrl;
+      const seq = ++requestSeq.current;
       setModelsLoading(true);
       setModelsError(null);
       setPricingStatus(null);
       try {
         const list = await listModels(target, key, p);
+        if (seq !== requestSeq.current) return false; // stale profile
         setModels(list);
       } catch (err) {
+        if (seq !== requestSeq.current) return false; // stale profile
         setModels(null);
         setModelsError(err instanceof Error ? err.message : String(err));
       }
@@ -171,11 +243,13 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
       if (getProvider(p).hasZenPricing) {
         try {
           const entries = await fetchZenPricing();
+          if (seq !== requestSeq.current) return false; // stale profile
           setPricing(entries);
           setPricingStatus(`Prices imported for ${entries.length} models`);
-          await saveJson("zen-prices.json", entries);
+          await setPref("zen-prices", entries);
           pricesOk = true;
         } catch (err) {
+          if (seq !== requestSeq.current) return false; // stale profile
           setPricingStatus(err instanceof Error ? err.message : String(err));
         }
       }
@@ -195,7 +269,7 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
       );
       if (stale || pricesOk) return;
       if (!getProvider(initialProvider).hasZenPricing) return;
-      const cached = await loadJson<ZenPricingEntry[]>("zen-prices.json");
+      const cached = await getPref<ZenPricingEntry[]>("zen-prices");
       if (cached && cached.length > 0) {
         setPricing(cached);
         setPricingStatus(`Using ${cached.length} prices from a previous import`);
@@ -234,6 +308,7 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
     selection === CUSTOM_MODEL ? customModel.trim() : selection;
 
   const canSave =
+    keyResolved &&
     apiKey.trim() !== "" &&
     (selection === CUSTOM_MODEL ? customModel.trim() !== "" : selection !== "");
 
@@ -264,18 +339,56 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
     setConfirmPaidOpen(false);
   };
 
-  /** Switch to a provider: fill its default URL + model and reload the list. */
+  /** Switch to a provider: fill its default URL + model, select THAT
+   * profile's stored credential (or an empty field — never another
+   * profile's key), and reload the list. `keyOverride` is only passed when
+   * the caller already holds a key that belongs to THIS provider
+   * (auto-detection while typing). */
   const applyProvider = (p: ProviderId, keyOverride?: string) => {
     setProvider(p);
     const def = getProvider(p);
     setBaseUrl(def.defaultBaseUrl);
     setSelection(def.defaultModel);
     setUrlCustomized(false);
-    const key = keyOverride ?? apiKey.trim();
-    void loadModels(def.defaultBaseUrl, p, key);
+    if (keyOverride !== undefined) {
+      // The typed key WAS detected as this provider's key: it belongs to
+      // the new profile and is safe to keep.
+      keySeq.current++; // supersede any in-flight credential load
+      keyProfileRef.current = profileId(p, def.defaultBaseUrl);
+      setKeyResolved(true);
+      setApiKey(keyOverride);
+      void loadModels(def.defaultBaseUrl, p, keyOverride);
+    } else {
+      // Invalidate SYNCHRONOUSLY; the resolution effect loads this
+      // profile's own stored credential (and reloads models with it).
+      keyProfileRef.current = "";
+      setKeyResolved(false);
+      setApiKey("");
+    }
+  };
+
+  /** An endpoint edit invalidates the current key synchronously: the
+   * previous endpoint's key is never sent to the new one, not even for a
+   * single click. The resolution effect loads the new profile's stored
+   * credential afterwards. */
+  const handleBaseUrlChange = (value: string) => {
+    setBaseUrl(value);
+    setUrlCustomized(true);
+    const target = currentProfile(provider, value);
+    if (keyProfileRef.current === target) return;
+    keySeq.current++;
+    keyProfileRef.current = "";
+    setApiKey("");
+    setKeyResolved(false);
   };
 
   const handleApiKeyChange = (value: string) => {
+    // A typed key belongs to the profile the form is showing: it settles
+    // that profile immediately and cancels any pending stored-credential
+    // load (a late response must not overwrite a fresh input).
+    keySeq.current++;
+    keyProfileRef.current = currentProfile();
+    setKeyResolved(true);
     setApiKey(value);
     const detected = detectProviderFromKey(value);
     setDetectedProvider(detected);
@@ -285,11 +398,13 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
   };
 
   const handleTest = async () => {
+    if (!keyResolved) return;
     if (!apiKey.trim()) {
       setTestStatus("error");
       setTestMessage("Enter your API key first.");
       return;
     }
+    const seq = ++requestSeq.current;
     setTestStatus("loading");
     setTestMessage("");
     try {
@@ -298,16 +413,36 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
         apiKey.trim(),
         provider,
       );
+      if (seq !== requestSeq.current) return; // stale test: inputs changed
       setModels(list);
       setTestStatus("success");
       setTestMessage(`Connected — ${list.length} models available.`);
     } catch (err) {
+      if (seq !== requestSeq.current) return; // stale test: inputs changed
       setTestStatus("error");
       setTestMessage(err instanceof Error ? err.message : String(err));
     }
   };
 
+  /** Explicit Forget: delete the credential of the profile the FORM shows
+   * (not necessarily the persisted config) and clear the field. */
+  const handleForget = async () => {
+    const url = baseUrl.trim() || getProvider(provider).defaultBaseUrl;
+    await useChatStore.getState().forgetCredential({ provider, baseUrl: url });
+    keySeq.current++;
+    keyProfileRef.current = currentProfile(provider, url);
+    setApiKey("");
+    setKeyResolved(true);
+    setTestStatus("idle");
+    setTestMessage("");
+    setSessionKeyNote(false);
+  };
+
   const handleSave = async () => {
+    if (!keyResolved) return;
+    // The key is verified into the OS keychain under THIS profile's
+    // account (provider + endpoint) inside setConfig; the persisted
+    // config carries only the account reference, never the secret.
     await setConfig({
       provider,
       baseUrl: baseUrl.trim() || getProvider(provider).defaultBaseUrl,
@@ -315,6 +450,10 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
       model: resolvedModel,
       reasoningEffort: reasoningEffort.trim() !== "" ? reasoningEffort : null,
     });
+    const stored = useChatStore.getState().config;
+    setSessionKeyNote(stored.sessionKeyOnly);
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 1500);
     onDone?.();
   };
 
@@ -349,17 +488,15 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
           <div className="flex gap-2">
             <Input
               value={baseUrl}
-              onChange={(e) => {
-                setBaseUrl(e.target.value);
-                setUrlCustomized(true);
-              }}
+              onChange={(e) => handleBaseUrlChange(e.target.value)}
               placeholder={getProvider(provider).defaultBaseUrl}
+              aria-label="API base URL"
               className={inputClass}
             />
             <Button
               variant="secondary"
               size="icon-sm"
-              onClick={() => setBaseUrl(getProvider(provider).defaultBaseUrl)}
+              onClick={() => handleBaseUrlChange(getProvider(provider).defaultBaseUrl)}
               title="Reset to the provider's default URL"
               aria-label="Reset base URL"
             >
@@ -394,6 +531,7 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
                 ? `${getProvider(provider).keyPrefixes[0]}…`
                 : "sk-…"
             }
+            aria-label="API key"
             className={inputClass}
           />
           {detectedProvider && detectedProvider !== provider && (
@@ -407,22 +545,38 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
               </button>
             </div>
           )}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleTest}
-            disabled={testStatus === "loading"}
-            className="mt-1"
-          >
-            {testStatus === "loading" ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="size-3.5" />
-            )}
-            Test connection
-          </Button>
+          {!keyResolved && (
+            <p className="text-xs text-text-muted" role="status">
+              Loading this endpoint's saved credential…
+            </p>
+          )}
+          <div className="mt-1 flex items-center gap-3">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleTest}
+              disabled={testStatus === "loading" || !keyResolved}
+            >
+              {testStatus === "loading" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3.5" />
+              )}
+              Test connection
+            </Button>
+            {keyResolved &&
+              (config.keychainAccount != null || apiKey.trim() !== "") && (
+                <button
+                  type="button"
+                  onClick={() => void handleForget()}
+                  className="text-xs text-destructive hover:text-destructive/80 select-none"
+                >
+                  Forget saved key
+                </button>
+              )}
+          </div>
           {testStatus === "success" && (
-            <div className="flex items-center gap-1.5 text-xs text-green-400">
+            <div className="flex items-center gap-1.5 text-xs text-primary">
               <CheckCircle2 className="size-3.5" />
               {testMessage}
             </div>
@@ -441,7 +595,7 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
             <Label className="text-text-secondary text-xs">Model</Label>
             <button
               onClick={() => loadModels(baseUrl)}
-              disabled={modelsLoading}
+              disabled={modelsLoading || !keyResolved}
               className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 disabled:opacity-50 select-none"
               title="Reload the model list"
             >
@@ -489,7 +643,7 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
                         {displayName(id)}
                       </span>
                       {removed ? (
-                        <span className="text-[10px] font-semibold text-red-400 bg-red-400/10 border border-red-400/30 rounded px-1 py-px uppercase tracking-wide shrink-0">
+                        <span className="text-[10px] font-semibold text-destructive bg-destructive/10 border border-destructive/30 rounded px-1 py-px uppercase tracking-wide shrink-0">
                           Removed
                         </span>
                       ) : (
@@ -498,14 +652,14 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
                             <span
                               className={
                                 free
-                                  ? "text-xs text-green-400 font-medium"
+                                  ? "text-xs text-primary font-medium"
                                   : "text-xs text-text-muted"
                               }
                             >
                               {price}
                             </span>
                             {free && (
-                              <span className="text-[10px] font-semibold text-green-400 bg-green-400/10 border border-green-400/30 rounded px-1 py-px uppercase tracking-wide">
+                              <span className="text-[10px] font-semibold text-primary bg-green-400/10 border border-green-400/30 rounded px-1 py-px uppercase tracking-wide">
                                 Free
                               </span>
                             )}
@@ -623,12 +777,18 @@ function ApiConfigFormInner({ onDone }: ApiConfigFormProps) {
           </div>
         )}
 
+        {sessionKeyNote && (
+          <p className="text-xs text-warning" role="note">
+            Secure storage is unavailable — the key is kept for this session
+            only and will need to be entered again next launch.
+          </p>
+        )}
         <Button
           onClick={handleSave}
           className="w-full bg-primary hover:bg-primary/80 text-primary-foreground"
           disabled={!canSave}
         >
-          Save
+          {saved ? "Saved" : "Save"}
         </Button>
       </div>
 

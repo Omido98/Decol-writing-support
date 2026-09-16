@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { Mock } from "vitest";
 
 const storage: Record<string, string> = {};
 
@@ -20,53 +19,37 @@ vi.stubGlobal("localStorage", {
   },
 });
 
-vi.mock("@tauri-apps/plugin-fs", () => ({
-  readTextFile: vi.fn(),
-  writeTextFile: vi.fn(),
-  remove: vi.fn(),
-  BaseDirectory: { AppData: 22 },
-}));
+vi.mock("@/utils/repository", async () => {
+  const { fakeRepository } = await import("../../test/fakeRepository");
+  return { repo: fakeRepository };
+});
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(),
-  Channel: class {
-    onmessage: ((msg: unknown) => void) | null = null;
-  },
-}));
-
-import {
-  writeTextFile,
-  readTextFile,
-  remove,
-} from "@tauri-apps/plugin-fs";
 import { useLibraryStore, flushLibrarySave } from "@/stores/libraryStore";
+import { fakeRepoState, resetFakeRepository } from "../../test/fakeRepository";
+import { markdownDocument } from "@/utils/documentCodec";
 import type { LibraryTextMeta } from "@/types";
 
-const writeMock = writeTextFile as Mock;
-const readMock = readTextFile as Mock;
-const removeMock = remove as Mock;
-
-/** Simulate the disk: readTextFile serves what writeTextFile stored. */
-function useFakeDisk() {
-  const files = new Map<string, string>();
-  writeMock.mockImplementation(
-    async (path: string, content: string) => void files.set(path, content),
-  );
-  readMock.mockImplementation(async (path: string) => {
-    const content = files.get(path);
-    if (content === undefined) throw new Error("not found");
-    return content;
+/** Seed the fake repository with one existing text. */
+function seedText(id: string, title: string, content: string): void {
+  const now = "2026-01-01T00:00:00.000Z";
+  fakeRepoState.texts.set(id, {
+    meta: {
+      id,
+      title,
+      textType: "essay",
+      createdAt: now,
+      updatedAt: now,
+    },
+    body: markdownDocument(content),
+    versions: [],
+    rev: 0,
   });
-  removeMock.mockImplementation(
-    async (path: string) => void files.delete(path),
-  );
-  return files;
 }
 
 beforeEach(async () => {
   await flushLibrarySave();
-  vi.clearAllMocks();
   for (const key of Object.keys(storage)) delete storage[key];
+  resetFakeRepository();
   useLibraryStore.setState({
     texts: [],
     textsLoaded: false,
@@ -76,7 +59,6 @@ beforeEach(async () => {
 
 describe("libraryStore", () => {
   it("creates a text with defaults and derived snippet/word count", async () => {
-    useFakeDisk();
     const id = await useLibraryStore.getState().createText({
       title: "  My Essay  ",
       content: "First words of the essay body.",
@@ -91,16 +73,12 @@ describe("libraryStore", () => {
     expect(meta.wordCount).toBe(6);
     expect(meta.snippet).toBe("First words of the essay body.");
 
-    const contentFile = writeMock.mock.calls.find(
-      ([path]) => path === `text_${id}.json`,
+    expect(fakeRepoState.texts.get(id)?.body.content).toBe(
+      "First words of the essay body.",
     );
-    expect(JSON.parse(contentFile![1])).toEqual({
-      content: "First words of the essay body.",
-    });
   });
 
   it("takes a version snapshot only when content actually changes", async () => {
-    const files = useFakeDisk();
     const id = await useLibraryStore.getState().createText({
       title: "T",
       content: "v1",
@@ -108,18 +86,16 @@ describe("libraryStore", () => {
 
     // Unchanged content: no snapshot.
     await useLibraryStore.getState().updateText(id, { content: "v1" });
-    let versions = JSON.parse(files.get(`text_${id}.versions.json`) ?? "[]");
-    expect(versions).toHaveLength(0);
+    expect(fakeRepoState.texts.get(id)!.versions).toHaveLength(0);
 
     // Changed content: snapshots the replaced content.
     await useLibraryStore.getState().updateText(id, { content: "v2" });
-    versions = JSON.parse(files.get(`text_${id}.versions.json`) ?? "[]");
+    const versions = fakeRepoState.texts.get(id)!.versions;
     expect(versions).toHaveLength(1);
-    expect(versions[0].content).toBe("v1");
+    expect(versions[0].body.content).toBe("v1");
   });
 
   it("caps version history at 20 entries", async () => {
-    const files = useFakeDisk();
     const id = await useLibraryStore.getState().createText({
       title: "T",
       content: "v0",
@@ -127,38 +103,63 @@ describe("libraryStore", () => {
     for (let i = 1; i <= 25; i++) {
       await useLibraryStore.getState().updateText(id, { content: `v${i}` });
     }
-    const versions = JSON.parse(files.get(`text_${id}.versions.json`) ?? "[]");
+    const versions = fakeRepoState.texts.get(id)!.versions;
     expect(versions).toHaveLength(20);
-    expect(versions[0].content).toBe("v24");
+    expect(versions[0].body.content).toBe("v24");
+  });
+
+  it("takes a named snapshot of the current content on demand", async () => {
+    const id = await useLibraryStore.getState().createText({
+      title: "T",
+      content: "version one",
+    });
+    await useLibraryStore.getState().updateText(id, { content: "version two" });
+
+    await useLibraryStore.getState().createSnapshot(id, "before restructure");
+
+    const versions = await useLibraryStore.getState().loadVersions(id);
+    const snap = versions.find((v) => v.label === "before restructure");
+    expect(snap).toBeDefined();
+    expect(snap!.body.content).toBe("version two");
   });
 
   it("restores a version losslessly: current content is snapshotted first", async () => {
-    useFakeDisk();
     const id = await useLibraryStore.getState().createText({
       title: "T",
       content: "original",
     });
     await useLibraryStore.getState().updateText(id, { content: "edited" });
     const versions = await useLibraryStore.getState().loadVersions(id);
-    const originalSnapshot = versions.find(
-      (v) => v.content === "original",
-    );
+    const originalSnapshot = versions.find((v) => v.body.content === "original");
     expect(originalSnapshot).toBeDefined();
 
-    await useLibraryStore
-      .getState()
-      .restoreVersion(id, originalSnapshot!.savedAt);
+    await useLibraryStore.getState().restoreVersion(id, originalSnapshot!.versionId);
 
-    expect(await useLibraryStore.getState().loadTextContent(id)).toBe(
+    expect((await useLibraryStore.getState().loadTextContent(id)).content).toBe(
       "original",
     );
     // "edited" was snapshotted during the restore, so nothing is lost.
     const after = await useLibraryStore.getState().loadVersions(id);
-    expect(after.some((v) => v.content === "edited")).toBe(true);
+    expect(after.some((v) => v.body.content === "edited")).toBe(true);
+  });
+
+  it("restoreVersion persists the metadata change", async () => {
+    const id = await useLibraryStore.getState().createText({
+      title: "T",
+      content: "original",
+    });
+    await useLibraryStore.getState().updateText(id, { content: "edited" });
+    const versions = await useLibraryStore.getState().loadVersions(id);
+    const original = versions.find((v) => v.body.content === "original")!;
+
+    await useLibraryStore.getState().restoreVersion(id, original.versionId);
+
+    const meta = fakeRepoState.texts.get(id)!.meta;
+    expect(meta.snippet).toBe("original");
+    expect(meta.updatedAt).toBe(useLibraryStore.getState().texts[0].updatedAt);
   });
 
   it("deleteText removes metadata, content, and versions", async () => {
-    const files = useFakeDisk();
     const id = await useLibraryStore.getState().createText({
       title: "T",
       content: "body",
@@ -167,12 +168,20 @@ describe("libraryStore", () => {
     await useLibraryStore.getState().deleteText(id);
 
     expect(useLibraryStore.getState().texts).toHaveLength(0);
-    expect(files.has(`text_${id}.json`)).toBe(false);
-    expect(files.has(`text_${id}.versions.json`)).toBe(false);
+    expect(fakeRepoState.texts.has(id)).toBe(false);
+  });
+
+  it("loading the text list first, then mutating, keeps existing texts", async () => {
+    seedText("e1", "Existing", "existing body");
+
+    // Cold start: save straight to the library without visiting it first.
+    await useLibraryStore.getState().createText({ title: "From chat" });
+
+    expect([...fakeRepoState.texts.keys()]).toContain("e1");
+    expect(useLibraryStore.getState().texts).toHaveLength(2);
   });
 
   it("loadTexts sorts newest-updated first", async () => {
-    const files = useFakeDisk();
     const older: LibraryTextMeta = {
       id: "a",
       title: "Old",
@@ -187,7 +196,8 @@ describe("libraryStore", () => {
       createdAt: "2026-01-02T00:00:00.000Z",
       updatedAt: "2026-01-02T00:00:00.000Z",
     };
-    files.set("library.json", JSON.stringify([older, newer]));
+    fakeRepoState.texts.set("a", { meta: older, body: markdownDocument(""), versions: [], rev: 0 });
+    fakeRepoState.texts.set("b", { meta: newer, body: markdownDocument(""), versions: [], rev: 0 });
 
     await useLibraryStore.getState().loadTexts();
     expect(useLibraryStore.getState().texts.map((t) => t.id)).toEqual([
@@ -197,18 +207,14 @@ describe("libraryStore", () => {
     expect(useLibraryStore.getState().textsLoaded).toBe(true);
   });
 
-  it("flushes pending debounced content saves", async () => {
-    const files = useFakeDisk();
+  it("flushLibrarySave resolves and leaves no pending saves", async () => {
     const id = await useLibraryStore.getState().createText({
       title: "T",
       content: "before",
     });
     await useLibraryStore.getState().updateText(id, { content: "after" });
-    // The content save is debounced; flush must persist it.
     await flushLibrarySave();
-    expect(JSON.parse(files.get(`text_${id}.json`) ?? "{}")).toEqual({
-      content: "after",
-    });
+    expect(fakeRepoState.texts.get(id)?.body.content).toBe("after");
   });
 
   it("hands off an attach request between tabs", () => {

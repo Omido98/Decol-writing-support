@@ -3,7 +3,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useChatStore, messageKey } from "@/stores/chatStore";
 import { useLibraryStore } from "@/stores/libraryStore";
-import { deslopText } from "@/utils/api";
+import { cleanupMessage } from "@/services/chatSend";
+import { useThreadFailedSends, useThreadOperation } from "@/components/chat/useThreadOperation";
 import { cn } from "@/lib/utils";
 import {
   Copy,
@@ -16,15 +17,41 @@ import {
   BookmarkPlus,
   FileText,
   FolderOpen,
+  TriangleAlert,
 } from "lucide-react";
 
 function LoadingDots() {
   return (
-    <div className="flex items-center gap-1.5 px-4 py-3">
+    <div
+      role="status"
+      aria-label="Generating answer"
+      className="flex items-center gap-1.5 px-4 py-3"
+    >
       <span className="size-2 rounded-full bg-text-muted animate-bounce [animation-delay:0ms]" />
       <span className="size-2 rounded-full bg-text-muted animate-bounce [animation-delay:150ms]" />
       <span className="size-2 rounded-full bg-text-muted animate-bounce [animation-delay:300ms]" />
     </div>
+  );
+}
+
+/**
+ * Markdown images are rendered as their alt text + link, NOT as <img>:
+ * rendering model-supplied markdown would make the webview fetch external
+ * images automatically — a network call that bypasses every research/
+ * network control the app enforces elsewhere.
+ */
+function MarkdownImage(props: { src?: string; alt?: string }) {
+  const alt = props.alt?.trim() || "image";
+  if (!props.src) return <span>{alt}</span>;
+  return (
+    <a
+      href={props.src}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="text-primary underline break-all"
+    >
+      {alt} (external image — open link)
+    </a>
   );
 }
 
@@ -40,13 +67,26 @@ export default function MessageList({
   onRegenerate?: (key: string) => void;
   /** Project that "Save to Library" should file texts into, when any. */
   saveToProjectId?: string | null;
-  /** Save an assistant reply as the linked project's brief (project threads). */
-  onSaveAsBrief?: (content: string) => void;
+  /** Save an assistant reply as the linked project's brief (project threads).
+   * The flash confirmation waits for the returned promise. */
+  onSaveAsBrief?: (content: string) => void | Promise<void>;
 }) {
   const messages = useChatStore((s) => s.messages);
-  const isSending = useChatStore((s) => s.isSending);
-  const streamingText = useChatStore((s) => s.streamingText);
+  const activeThreadId = useChatStore((s) => s.activeThreadId);
   const error = useChatStore((s) => s.error);
+  // The OWNER's running operation drives every busy/streaming affordance:
+  // another conversation's request never shows a spinner here, and this
+  // conversation's buffer is rendered directly (navigation-independent).
+  const operation = useThreadOperation(activeThreadId);
+  const failedSends = useThreadFailedSends(activeThreadId);
+  const busy = !!operation;
+  const streamingOutput =
+    operation && operation.type !== "cleanup" ? operation.output : "";
+  // Fresh/retry failures are retained by the service; the overlay makes
+  // them visible even when the store's message was never flagged (failure
+  // landed while the owner was hidden).
+  const failedKeys = new Set(failedSends.map((f) => f.messageKey));
+
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const lastMessageRef = useRef<{ role: "user" | "assistant"; timestamp: string } | null>(
@@ -54,14 +94,9 @@ export default function MessageList({
   );
   const [stickyToBottom, setStickyToBottom] = useState(true);
 
-  const config = useChatStore((s) => s.config);
-  const addMessage = useChatStore((s) => s.addMessage);
-  const setError = useChatStore((s) => s.setError);
-
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
   const [briefSavedId, setBriefSavedId] = useState<string | null>(null);
-  const [deslopPendingId, setDeslopPendingId] = useState<string | null>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Auto-scroll to the bottom only while the user is already near the bottom,
@@ -75,10 +110,10 @@ export default function MessageList({
 
     if (isNewUserMessage || stickyToBottom) {
       bottomRef.current?.scrollIntoView({
-        behavior: isSending ? "auto" : "smooth",
+        behavior: busy ? "auto" : "smooth",
       });
     }
-  }, [messages, isSending, streamingText, stickyToBottom]);
+  }, [messages, busy, streamingOutput, stickyToBottom]);
 
   const handleScroll = () => {
     const el = containerRef.current;
@@ -123,44 +158,34 @@ export default function MessageList({
 
   const handleSaveToLibrary = async (msgId: string, content: string) => {
     if (!content.trim()) return;
-    const threadTitle = useChatStore
-      .getState()
-      .threads.find((t) => t.id === useChatStore.getState().activeThreadId)
+    const chat = useChatStore.getState();
+    const threadTitle = chat.threads.find((t) => t.id === chat.activeThreadId)
       ?.title;
     await useLibraryStore.getState().createText({
       title:
         threadTitle && threadTitle !== "Untitled conversation"
           ? threadTitle
           : "Saved from chat",
+      // A conversation with a writing brief preserves its text type.
+      textType: chat.brief?.textType ?? "other",
       ...(saveToProjectId ? { projectId: saveToProjectId } : {}),
       content,
     });
     flashFeedback(msgId, setSavedId);
   };
 
-  const handleSaveAsBrief = (msgId: string, content: string) => {
+  const handleSaveAsBrief = async (msgId: string, content: string) => {
     if (!content.trim() || !onSaveAsBrief) return;
-    onSaveAsBrief(content);
+    // Wait for the brief to actually land before confirming.
+    await onSaveAsBrief(content);
     flashFeedback(msgId, setBriefSavedId);
   };
 
-  const handleDeslop = async (msgId: string, content: string) => {
-    if (!content.trim() || deslopPendingId) return;
-    setDeslopPendingId(msgId);
-    setError(null);
-    const result = await deslopText(content, config);
-    setDeslopPendingId(null);
-    if (result.error) {
-      setError(result.error);
-      return;
-    }
-    if (result.content.trim()) {
-      addMessage({
-        role: "assistant",
-        content: result.content,
-        timestamp: new Date().toISOString(),
-      });
-    }
+  // Cleanup runs in the SHARED service: its admission guard makes a
+  // duplicate cleanup impossible across full and compact surfaces, and
+  // its abort signal cancels the request.
+  const handleDeslop = (key: string) => {
+    void cleanupMessage(key);
   };
 
   return (
@@ -172,6 +197,11 @@ export default function MessageList({
       {messages.map((msg) => {
         const isUser = msg.role === "user";
         const key = messageKey(msg);
+        const failed = isUser && (msg.failed === true || failedKeys.has(key));
+        const cleanupPending =
+          operation?.type === "cleanup" &&
+          operation.targetMessageId !== null &&
+          operation.targetMessageId === (msg.id ?? null);
         const feedback =
           copiedId === key
             ? "copied"
@@ -188,12 +218,12 @@ export default function MessageList({
               isUser ? "justify-end" : "justify-start",
             )}
           >
-            {isUser && msg.failed && (
+            {failed && (
               <div className="flex flex-col gap-1 pr-2 justify-start">
                 <button
                   type="button"
                   onClick={() => onResend?.(key)}
-                  disabled={isSending || !!deslopPendingId}
+                  disabled={busy}
                   className="text-destructive hover:text-destructive/80 transition-colors disabled:opacity-50"
                   title="Re-send message"
                   aria-label="Re-send message"
@@ -229,24 +259,39 @@ export default function MessageList({
                   <p>{msg.content}</p>
                 </>
               ) : (
-                <div className="chat-markdown prose prose-sm max-w-none dark:prose-invert">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {msg.content}
-                  </ReactMarkdown>
-                </div>
+                <>
+                  <div className="chat-markdown prose prose-sm max-w-none dark:prose-invert">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: MarkdownImage }}>
+                      {msg.content}
+                    </ReactMarkdown>
+                  </div>
+                  {msg.incomplete && (
+                    <p
+                      role="status"
+                      className="mt-2 flex items-start gap-1.5 text-xs text-warning"
+                    >
+                      <TriangleAlert className="size-3.5 shrink-0 mt-0.5" />
+                      {msg.incomplete === "truncated"
+                        ? "Answer truncated — the model reached its output limit. Partial response."
+                        : "Answer interrupted — partial response."}
+                    </p>
+                  )}
+                </>
               )}
             </div>
 
             {!isUser && (
               <div className="flex flex-col gap-1 pl-2 justify-start">
-                {messages[messages.length - 1] === msg && (
+                {(messages[messages.length - 1] === msg || msg.incomplete) && (
                   <button
                     type="button"
                     onClick={() => onRegenerate?.(key)}
-                    disabled={isSending || !!deslopPendingId}
+                    disabled={busy}
                     className="text-text-muted hover:text-text-primary transition-colors disabled:opacity-50"
-                    title="Regenerate answer"
-                    aria-label="Regenerate answer"
+                    title={
+                      msg.incomplete ? "Retry this answer" : "Regenerate answer"
+                    }
+                    aria-label={msg.incomplete ? "Retry answer" : "Regenerate answer"}
                   >
                     <RefreshCw className="size-3.5" />
                   </button>
@@ -259,7 +304,7 @@ export default function MessageList({
                   aria-label="Copy message"
                 >
                   {feedback === "copied" ? (
-                    <Check className="size-3.5 text-green-400" />
+                    <Check className="size-3.5 text-primary" />
                   ) : (
                     <Copy className="size-3.5" />
                   )}
@@ -277,7 +322,7 @@ export default function MessageList({
                     aria-label="Save as project brief"
                   >
                     {feedback === "brief saved" ? (
-                      <Check className="size-3.5 text-green-400" />
+                      <Check className="size-3.5 text-primary" />
                     ) : (
                       <FolderOpen className="size-3.5" />
                     )}
@@ -291,24 +336,22 @@ export default function MessageList({
                   aria-label="Save to Library"
                 >
                   {feedback === "saved" ? (
-                    <Check className="size-3.5 text-green-400" />
+                    <Check className="size-3.5 text-primary" />
                   ) : (
                     <BookmarkPlus className="size-3.5" />
                   )}
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleDeslop(key, msg.content)}
-                  disabled={isSending || !!deslopPendingId}
+                  onClick={() => handleDeslop(key)}
+                  disabled={busy}
                   className="text-text-muted hover:text-text-primary transition-colors disabled:opacity-50"
                   title={
-                    deslopPendingId === key
-                      ? "Removing AI slop…"
-                      : "Remove AI slop"
+                    cleanupPending ? "Removing AI slop…" : "Remove AI slop"
                   }
                   aria-label="Remove AI slop"
                 >
-                  {deslopPendingId === key ? (
+                  {cleanupPending ? (
                     <Loader2 className="size-3.5 animate-spin" />
                   ) : (
                     <Sparkles className="size-3.5" />
@@ -320,26 +363,28 @@ export default function MessageList({
         );
       })}
 
-      {isSending && streamingText ? (
-        <div className="flex justify-start">
-          <div className="max-w-[75ch] rounded-lg bg-surface text-text-primary border border-border px-4 py-3 break-words">
-            <div className="chat-markdown prose prose-sm max-w-none dark:prose-invert">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {streamingText}
-              </ReactMarkdown>
+      {operation && operation.type !== "cleanup" ? (
+        streamingOutput ? (
+          <div className="flex justify-start">
+            <div className="max-w-[75ch] rounded-lg bg-surface text-text-primary border border-border px-4 py-3 break-words">
+              <div className="chat-markdown prose prose-sm max-w-none dark:prose-invert">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: MarkdownImage }}>
+                  {streamingOutput}
+                </ReactMarkdown>
+              </div>
+              <span
+                className="inline-block w-2 h-4 align-middle bg-primary/70 animate-pulse ml-0.5"
+                aria-hidden="true"
+              />
             </div>
-            <span
-              className="inline-block w-2 h-4 align-middle bg-primary/70 animate-pulse ml-0.5"
-              aria-hidden="true"
-            />
           </div>
-        </div>
-      ) : isSending ? (
-        <div className="flex justify-start">
-          <div className="max-w-[80%] rounded-lg bg-surface text-text-primary border border-border">
-            <LoadingDots />
+        ) : (
+          <div className="flex justify-start">
+            <div className="max-w-[80%] rounded-lg bg-surface text-text-primary border border-border">
+              <LoadingDots />
+            </div>
           </div>
-        </div>
+        )
       ) : null}
 
       {error && (

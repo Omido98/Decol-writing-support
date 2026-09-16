@@ -3,7 +3,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useProjectStore } from "@/stores/projectStore";
+import { useDraftStore, flushDrafts } from "@/stores/draftStore";
 import { useAppStore } from "@/stores/useAppStore";
+import { repo } from "@/utils/repository";
 import {
   AUDIENCES,
   CITATION_STYLES,
@@ -78,15 +80,26 @@ export default function ProjectDetail({
   const [editingBrief, setEditingBrief] = useState(false);
   const [briefDraft, setBriefDraft] = useState("");
   const [briefSaved, setBriefSaved] = useState(false);
+  const [briefSaving, setBriefSaving] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Draft session: the brief draft lives OUT of component state, so
+  // switching projects/tabs keeps it and a restart recovers it.
+  const briefKey = `project-brief:${id}`;
+  const brief = useDraftStore((s) => s.drafts[briefKey] ?? null);
+  const setDraft = useDraftStore((s) => s.setDraft);
+  const markError = useDraftStore((s) => s.markError);
+  const clearDraft = useDraftStore((s) => s.clearDraft);
 
   // Edit dialog fields
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [defaultAudience, setDefaultAudience] = useState<string>("none");
   const [defaultTone, setDefaultTone] = useState<string>("none");
-  const [defaultCitations, setDefaultCitations] = useState<string>("none");
+  // "none" is a REAL citation option ("No citations"), so "not set" needs
+  // its own sentinel — sharing them made "No citations" unpersistable.
+  const [defaultCitations, setDefaultCitations] = useState<string>("__unset__");
   const [defaultLanguage, setDefaultLanguage] = useState("");
   const [references, setReferences] = useState("");
 
@@ -94,7 +107,11 @@ export default function ProjectDetail({
     .filter((t) => t.projectId === id)
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 
-  // Load the brief once per project.
+  // Load the brief once per project; drafts hydrate at startup.
+  useEffect(() => {
+    void useDraftStore.getState().hydrate();
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     setBriefContent(null);
@@ -123,7 +140,7 @@ export default function ProjectDetail({
     setDescription(project.description ?? "");
     setDefaultAudience(project.defaultAudience ?? "none");
     setDefaultTone(project.defaultTone ?? "none");
-    setDefaultCitations(project.defaultCitations ?? "none");
+    setDefaultCitations(project.defaultCitations ?? "__unset__");
     setDefaultLanguage(project.defaultLanguage ?? "");
     setReferences(project.references ?? "");
     setEditOpen(true);
@@ -136,7 +153,9 @@ export default function ProjectDetail({
       defaultAudience: defaultAudience === "none" ? null : (defaultAudience as AudienceId),
       defaultTone: defaultTone === "none" ? null : (defaultTone as ToneId),
       defaultCitations:
-        defaultCitations === "none" ? null : (defaultCitations as CitationId),
+        defaultCitations === "__unset__"
+          ? null
+          : (defaultCitations as CitationId),
       defaultLanguage: defaultLanguage.trim() || null,
       references: references.trim(),
     });
@@ -144,23 +163,58 @@ export default function ProjectDetail({
   };
 
   const startEditingBrief = () => {
-    setBriefDraft(briefContent ?? "");
+    // The recovered draft (typed in an earlier session or before unmount)
+    // wins over the stored brief.
+    setBriefDraft(brief?.content ?? briefContent ?? "");
     setEditingBrief(true);
   };
 
   const handleSaveBrief = async () => {
-    await updateProject(id, { briefContent: briefDraft });
-    setBriefContent(briefDraft);
+    // Capture the submitted revision: typing while the save is in flight
+    // must stay dirty, and only the acknowledged revision is cleared.
+    const submitted = briefDraft;
+    setBriefSaving(true);
+    try {
+      await updateProject(id, { briefContent: submitted });
+      // Acknowledged save: flush the debounced brief saves to disk before
+      // reporting "Saved".
+      await repo.flushProjectSaves();
+      await repo.idle();
+      const current = useDraftStore.getState().drafts[briefKey];
+      const superseded = current != null && current.content !== submitted;
+      if (!superseded) {
+        clearDraft(briefKey);
+        setEditingBrief(false);
+      }
+      await flushDrafts();
+      setBriefContent(submitted);
+      setBriefSaved(true);
+      setTimeout(() => setBriefSaved(false), 1500);
+    } catch (err) {
+      // Keep newer typing untouched; record the failed revision exactly
+      // when nothing newer was typed meanwhile.
+      const current = useDraftStore.getState().drafts[briefKey];
+      const unchanged = current == null || current.content === submitted;
+      markError(
+        briefKey,
+        `Save failed: ${err instanceof Error ? err.message : String(err)}`,
+        unchanged ? { content: submitted } : undefined,
+      );
+      await flushDrafts();
+    } finally {
+      setBriefSaving(false);
+    }
+  };
+
+  const discardBriefDraft = () => {
+    clearDraft(briefKey);
+    setBriefDraft(briefContent ?? "");
     setEditingBrief(false);
-    setBriefSaved(true);
-    setTimeout(() => setBriefSaved(false), 1500);
   };
 
   const handleDeleteProject = async () => {
-    // Texts survive as standalone: unlink before deleting.
-    for (const t of memberTexts) {
-      await useLibraryStore.getState().updateText(t.id, { projectId: "" });
-    }
+    // One domain operation: texts AND conversations are unlinked (they
+    // survive as standalone) while the project and its brief are removed.
     await deleteProject(id);
     setConfirmDelete(false);
     onBack();
@@ -246,8 +300,13 @@ export default function ProjectDetail({
                       ) : (
                         <Save className="size-4 mr-1" />
                       )}
-                      {briefSaved ? "Saved" : "Save brief"}
+                      {briefSaving ? "Saving…" : briefSaved ? "Saved" : "Save brief"}
                     </Button>
+                    {editingBrief && (
+                      <Button variant="ghost" size="sm" onClick={discardBriefDraft}>
+                        Discard
+                      </Button>
+                    )}
                   </>
                 ) : (
                   <Button variant="outline" size="sm" onClick={startEditingBrief}>
@@ -270,12 +329,31 @@ export default function ProjectDetail({
               </div>
             </div>
             {editingBrief ? (
-              <Textarea
-                value={briefDraft}
-                onChange={(e) => setBriefDraft(e.target.value)}
-                placeholder="Purpose, audience, planned texts, structure, topics, voice, citations, must include, must avoid…"
-                className="bg-field min-h-[280px] resize-y [font-family:var(--font-doc)]"
-              />
+              <>
+                {brief?.error && (
+                  <div
+                    role="alert"
+                    className="mb-2 flex items-center gap-3 rounded-lg border border-border bg-surface-alt px-3 py-2 text-xs text-text-secondary"
+                  >
+                    <span className="flex-1">{brief.error} Your text is kept; retry or discard explicitly.</span>
+                    <Button size="sm" variant="outline" onClick={() => void handleSaveBrief()}>
+                      Retry
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={discardBriefDraft}>
+                      Discard draft
+                    </Button>
+                  </div>
+                )}
+                <Textarea
+                  value={briefDraft}
+                  onChange={(e) => {
+                    setBriefDraft(e.target.value);
+                    setDraft(briefKey, "project-brief", id, { content: e.target.value });
+                  }}
+                  placeholder="Purpose, audience, planned texts, structure, topics, voice, citations, must include, must avoid…"
+                  className="bg-field min-h-[280px] resize-y [font-family:var(--font-doc)]"
+                />
+              </>
             ) : briefContent == null ? (
               <p className="text-text-muted text-sm">Loading…</p>
             ) : briefContent.trim() ? (
@@ -419,12 +497,12 @@ export default function ProjectDetail({
               </div>
               <div className="space-y-1.5">
                 <Label>Citations</Label>
-                <Select value={defaultCitations} onValueChange={(v) => setDefaultCitations(v ?? "none")}>
+                <Select value={defaultCitations} onValueChange={(v) => setDefaultCitations(v ?? "__unset__")}>
                   <SelectTrigger className="w-full bg-field">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">Not set</SelectItem>
+                    <SelectItem value="__unset__">Not set</SelectItem>
                     {CITATION_STYLES.map((c) => (
                       <SelectItem key={c.id} value={c.id}>
                         {c.label}

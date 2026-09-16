@@ -1,0 +1,334 @@
+{
+  "bundle": {
+    "data": {
+      "messages": [
+        {
+          "attachmentsJson": "[{\"name\":\"fieldnotes.txt\",\"kind\":\"text\",\"content\":\"Observed in the archive.\",\"wordCount\":120}]",
+          "content": "Help me sharpen this claim.",
+          "failed": false,
+          "id": "msg-1",
+          "idx": 0,
+          "incomplete": null,
+          "role": "user",
+          "threadId": "th-1",
+          "timestamp": "2026-02-07T11:00:00.000Z"
+        },
+        {
+          "attachmentsJson": null,
+          "content": "Here is a tighter version…",
+          "failed": false,
+          "id": "msg-2",
+          "idx": 1,
+          "incomplete": "interrupted",
+          "role": "assistant",
+          "threadId": "th-1",
+          "timestamp": "2026-02-07T11:01:00.000Z"
+        },
+        {
+          "attachmentsJson": null,
+          "content": "Legacy reply without an id",
+          "failed": true,
+          "id": null,
+          "idx": 2,
+          "incomplete": null,
+          "role": "assistant",
+          "threadId": "th-1",
+          "timestamp": "2026-02-07T11:02:00.000Z"
+        },
+        {
+          "attachmentsJson": null,
+          "content": "Unrelated standalone note.",
+          "failed": false,
+          "id": "msg-4",
+          "idx": 0,
+          "incomplete": null,
+          "role": "user",
+          "threadId": "th-2",
+          "timestamp": "2026-01-20T11:00:00.000Z"
+        }
+      ],
+      "projectBriefs": [
+        {
+          "content": "Argue that citation is extractive when it silences the cited.",
+          "projectId": "p-1"
+        }
+      ],
+      "projects": [
+        {
+          "briefWordCount": 400,
+          "createdAt": "2026-01-01T00:00:00.000Z",
+          "defaultAudience": "academics",
+          "defaultCitations": "apa",
+          "defaultLanguage": "en",
+          "defaultTone": "academic",
+          "description": "Chapters and interviews.",
+          "id": "p-1",
+          "references": "Spivak, Can the Subaltern Speak? (1988).",
+          "rev": 3,
+          "title": "Dissertation — 東京 conversations",
+          "updatedAt": "2026-02-03T00:00:00.000Z"
+        }
+      ],
+      "proposals": [
+        {
+          "baseFragment": "extractive citation",
+          "baseRev": 1,
+          "contextNote": "Tighten the claim.",
+          "createdAt": "2026-02-05T10:00:00.000Z",
+          "documentId": "t-rich-1",
+          "id": "pr-1",
+          "proposedFragment": "extractive citation practices",
+          "requestKind": "revise",
+          "selFrom": 10,
+          "selTo": 30,
+          "status": "pending",
+          "updatedAt": "2026-02-05T10:00:00.000Z"
+        },
+        {
+          "baseFragment": "footnote",
+          "baseRev": 2,
+          "contextNote": null,
+          "createdAt": "2026-02-06T10:00:00.000Z",
+          "documentId": "t-rich-1",
+          "id": "pr-2",
+          "proposedFragment": "footnote (Smith 2012)",
+          "requestKind": "comment",
+          "selFrom": null,
+          "selTo": null,
+          "status": "accepted",
+          "updatedAt": "2026-02-06T10:00:00.000Z"
+        }
+      ],
+      "sourcePassages": [
+        {
+          "content": "Extractive citation takes without returning.",
+          "id": "sp-1",
+          "locator": "p. 12",
+          "sourceId": "s-1"
+        },
+        {
+          "content": "Rewriting is a method, not a metaphor.",
+          "id": "sp-2",
+          "locator": "pp. 20–21",
+          "sourceId": "s-1"
+        },
+        {
+          "content": "Question : qui parle dans le texte ?",
+          "id": "sp-3",
+          "locator": null,
+          "sourceId": "s-2"
+        }
+      ],
+      "sources": [
+        {
+          "abstract": "A foundational text on decolonizing research methodologies.",
+          "assetRef": "smith-2012.pdf",
+          "author": "Linda Tuhiwai Smith",
+          "containerTitle": null,
+          "contentHash": "sha256:aaa111",
+          "createdAt": "2026-01-15T00:00:00.000Z",
+          "doi": "10.1000/xyz123",
+          "extractionStatus": "ready",
+          "id": "s-1",
+          "includedInContext": true,
+          "issue": null,
+          "language": "en",
+          "notes": "Chapter 1 used for the methods section.",
+          "originalText": "Full text — preserved verbatim.",
+          "pages": "1-25",
+          "projectId": "p-1",
+          "publisher": "Zed Books",
+          "rev": 1,
+          "sourceType": "book",
+          "title": "Linda Tuhiwai Smith, Decolonizing Methodologies",
+          "translation": null,
+          "truncationNote": null,
+          "updatedAt": "2026-02-04T11:00:00.000Z",
+          "url": "https://example.org/smith",
+          "verification": "quote_matched",
+          "volume": null,
+          "year": "2012"
+        },
+        {
+          "abstract": "Oral history interview about land and memory.",
+          "assetRef": "interview.txt",
+          "author": null,
+          "containerTitle": null,
+          "contentHash": "sha256:bbb222",
+          "createdAt": "2026-01-16T00:00:00.000Z",
+          "doi": null,
+          "extractionStatus": "truncated",
+          "id": "s-2",
+          "includedInContext": false,
+          "issue": null,
+          "language": "fr",
+          "notes": null,
+          "originalText": "Entretien — texte intégral.",
+          "pages": null,
+          "projectId": null,
+          "publisher": null,
+          "rev": 0,
+          "sourceType": "interview",
+          "title": "Interview transcript",
+          "translation": "Translated from French by the author.",
+          "truncationNote": "Text truncated at 12,000 words.",
+          "updatedAt": "2026-01-30T11:00:00.000Z",
+          "url": null,
+          "verification": "unverified",
+          "volume": null,
+          "year": "1999"
+        }
+      ],
+      "textContents": [
+        {
+          "content": "# Legacy body\n\nMarkdown with «quotes».",
+          "contentFormat": "markdown",
+          "contentSchemaVersion": 1,
+          "plainText": null,
+          "textId": "t-legacy-1"
+        },
+        {
+          "content": "{\"type\":\"doc\",\"content\":[{\"type\":\"heading\",\"attrs\":{\"level\":1},\"content\":[{\"type\":\"text\",\"text\":\"On extractive citation\"}]},{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Ça, 東京 — prose with \"},{\"type\":\"text\",\"marks\":[{\"type\":\"bold\"}],\"text\":\"citations\"},{\"type\":\"text\",\"text\":\" and a footnote.\"}]}]}",
+          "contentFormat": "tiptap-json",
+          "contentSchemaVersion": 1,
+          "plainText": "On extractive citation Ça, 東京 — prose with citations and a footnote.",
+          "textId": "t-rich-1"
+        }
+      ],
+      "textVersions": [
+        {
+          "content": "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Earlier rich draft\"}]}]}",
+          "contentFormat": "tiptap-json",
+          "contentSchemaVersion": 1,
+          "label": "submitted draft",
+          "plainText": "Earlier rich draft",
+          "savedAt": "2026-01-10T09:00:00.000Z",
+          "textId": "t-rich-1",
+          "versionId": "v-1"
+        },
+        {
+          "content": "# Legacy snapshot\n\nOld markdown body",
+          "contentFormat": "markdown",
+          "contentSchemaVersion": 1,
+          "label": null,
+          "plainText": null,
+          "savedAt": "2026-01-20T09:00:00.000Z",
+          "textId": "t-rich-1",
+          "versionId": "v-2"
+        }
+      ],
+      "texts": [
+        {
+          "archived": false,
+          "createdAt": "2026-01-02T08:00:00.000Z",
+          "folder": "Drafts",
+          "id": "t-rich-1",
+          "pinned": true,
+          "projectId": "p-1",
+          "rev": 2,
+          "snippet": "Prose with citations and a footnote.",
+          "textType": "essay",
+          "title": "Chapter draft — ça / 東京",
+          "updatedAt": "2026-02-02T10:00:00.000Z",
+          "wordCount": 12
+        },
+        {
+          "archived": true,
+          "createdAt": "2026-01-03T08:00:00.000Z",
+          "folder": null,
+          "id": "t-legacy-1",
+          "pinned": false,
+          "projectId": null,
+          "rev": 0,
+          "snippet": null,
+          "textType": "other",
+          "title": "Old markdown draft",
+          "updatedAt": "2026-01-05T09:00:00.000Z",
+          "wordCount": null
+        }
+      ],
+      "threadBriefs": [
+        {
+          "briefJson": "{\"topic\":\"Extractive citation\",\"length\":\"3000 words\"}",
+          "threadId": "th-1"
+        }
+      ],
+      "threads": [
+        {
+          "archived": false,
+          "createdAt": "2026-01-05T00:00:00.000Z",
+          "id": "th-1",
+          "mode": "text",
+          "pinned": true,
+          "projectId": "p-1",
+          "references": "Fanon, Black Skin, White Masks (1952).",
+          "rev": 4,
+          "title": "On extractive citation — ça / 東京",
+          "updatedAt": "2026-02-07T12:00:00.000Z"
+        },
+        {
+          "archived": true,
+          "createdAt": "2026-01-06T00:00:00.000Z",
+          "id": "th-2",
+          "mode": "project",
+          "pinned": false,
+          "projectId": null,
+          "references": null,
+          "rev": 1,
+          "title": "Standalone notes",
+          "updatedAt": "2026-01-20T12:00:00.000Z"
+        }
+      ]
+    },
+    "exportedAt": "2026-02-08T09:30:00.000Z",
+    "format": "decol-writing-support-backup",
+    "preferences": {
+      "config": {
+        "apiKey": "",
+        "baseUrl": "https://opencode.ai/zen/v1",
+        "model": "deepseek-flash",
+        "provider": "zen",
+        "reasoningEffort": null
+      },
+      "recovery-drafts": {
+        "text:t-rich-1": {
+          "content": "Unsaved ending — ça",
+          "error": null,
+          "kind": "text",
+          "savedAt": "2026-02-08T08:55:00.000Z"
+        }
+      },
+      "settings": {
+        "accent": "#34d399",
+        "fontSize": 18,
+        "theme": "dark"
+      },
+      "workspace-shell": {
+        "activeTextId": "t-rich-1",
+        "inspectorWidth": 360,
+        "navigatorWidth": 240,
+        "view": "edit"
+      },
+      "zen-prices": {
+        "input": 0.0,
+        "model": "deepseek-flash",
+        "output": 0.0,
+        "updatedAt": "2026-02-08T09:00:00.000Z"
+      }
+    },
+    "version": 3
+  },
+  "comment": [
+    "Shared backup contract fixture (B01).",
+    "The `bundle` object is a v3 backup exactly as the desktop app",
+    "exports it: `data` is Rust's actual DbDump serialization",
+    "(flattened message/passage rows, camelCase, all fields present)",
+    "and `preferences` carries the parsed non-secret preference",
+    "values (the credential is stripped).",
+    "Frontend: src/utils/__tests__/backup.test.ts parses this file",
+    "with the production parser. Rust: repository.rs asserts that",
+    "applying `data` and re-exporting reproduces it exactly.",
+    "Regenerate from src-tauri with:",
+    "cargo test --lib regenerate_backup_contract_fixture -- --ignored"
+  ]
+}
