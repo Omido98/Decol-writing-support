@@ -42,6 +42,16 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
+// Count markdown parses: a keystroke must never re-parse the conversation.
+const markdownState = vi.hoisted(() => ({ renders: 0 }));
+
+vi.mock("react-markdown", () => ({
+  default: (props: { children?: unknown }) => {
+    markdownState.renders += 1;
+    return <div data-testid="markdown-row">{String(props.children ?? "")}</div>;
+  },
+}));
+
 vi.mock("@/utils/repository", async () => {
   const { fakeRepository } = await import("../../test/fakeRepository");
   return { repo: fakeRepository };
@@ -147,6 +157,7 @@ function seedThreads(): void {
 
 beforeEach(() => {
   prefsTable.clear();
+  markdownState.renders = 0;
   invokeMock.mockReset();
   invokeMock.mockImplementation(
     async (cmd: string, args: Record<string, unknown>) => {
@@ -369,5 +380,28 @@ describe("conversation navigation (B02)", () => {
       kind: "discussion",
       id: "th-a",
     });
+  });
+
+  it("typing in a composer never re-parses the conversation rows", async () => {
+    // Both chat surfaces (full discussion + compact assistant) are mounted;
+    // typing into either must not re-render the message list — the draft
+    // lives in the composer, and the rows are memoized.
+    useAppStore.setState({ view: { kind: "discussion", id: "th-a" } });
+    render(<WorkspaceShell />);
+    expect(
+      (await screen.findAllByText("message-from-A")).length,
+    ).toBeGreaterThanOrEqual(2);
+    const baseline = markdownState.renders;
+    expect(baseline).toBeGreaterThan(0);
+
+    const boxes = screen.getAllByRole("textbox");
+    expect(boxes).toHaveLength(2);
+    for (const box of boxes) {
+      fireEvent.change(box, { target: { value: "typing a long message" } });
+    }
+    expect((boxes[0] as HTMLTextAreaElement).value).toBe("typing a long message");
+    expect((boxes[1] as HTMLTextAreaElement).value).toBe("typing a long message");
+    // Zero re-parses: unchanged rows never re-render on a keystroke.
+    expect(markdownState.renders).toBe(baseline);
   });
 });

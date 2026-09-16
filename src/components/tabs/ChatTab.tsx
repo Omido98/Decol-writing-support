@@ -11,13 +11,11 @@ import {
 import { useThreadOperation } from "@/components/chat/useThreadOperation";
 import { composeProjectStartMessage } from "@/utils/systemPrompt";
 import { displayTextFromBody } from "@/utils/documentCodec";
-import { usePreparedPreview } from "@/components/chat/usePreparedPreview";
-import WhatWillBeSent from "@/components/chat/WhatWillBeSent";
+import ChatComposer from "@/components/chat/ChatComposer";
 import { useSourceStore } from "@/stores/sourceStore";
 import { parseFile } from "@/utils/fileParse";
 import ChatSettings from "@/components/chat/ChatSettings";
 import MessageList from "@/components/chat/MessageList";
-import MessageInput from "@/components/chat/MessageInput";
 import AttachmentPicker from "@/components/library/AttachmentPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -199,10 +197,6 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   const operation = useThreadOperation(activeThreadId);
   const isSending = !!operation;
   const setError = useChatStore((s) => s.setError);
-  const inputValue = useChatStore(
-    (s) => s.drafts[s.activeThreadId ?? ""] ?? "",
-  );
-  const setDraft = useChatStore((s) => s.setDraft);
   const messages = useChatStore((s) => s.messages);
   // The single conversation navigation action (route + owner load).
   const openDiscussion = useAppStore((s) => s.openDiscussion);
@@ -386,11 +380,9 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
     [allSources, threadProjectId],
   );
 
-  // The preview and the send share ONE prepared request (B14): the
-  // manifest below is the compiled output of exactly what will be sent,
-  // including awaited brief/source hydration and pending uploads.
-  const previewContext = usePreparedPreview();
-  const tokenEstimate = previewContext?.tokenEstimate ?? 0;
+  // The prepared preview lives in the composer (B14): the manifest there
+  // is the compiled output of exactly what will be sent, including
+  // awaited brief/source hydration and pending uploads.
   // ── Input state ──
   const [showConfig, setShowConfig] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -501,9 +493,23 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   );
 
   // ── Handle send ──
-  const handleSend = useCallback(() => {
-    void sendText({ text: inputValue });
-  }, [inputValue, sendText]);
+  const handleSend = useCallback(
+    (text: string) => {
+      void sendText({ text });
+    },
+    [sendText],
+  );
+
+  // Stable callbacks for the memoized message list: a keystroke must never
+  // re-render the conversation.
+  const handleResend = useCallback(
+    (key: string) => void sendText({ resendKey: key }),
+    [sendText],
+  );
+  const handleRegenerate = useCallback(
+    (key: string) => void sendText({ regenerateKey: key }),
+    [sendText],
+  );
 
   // ── Start a text thread from the writing brief ──
   // The composed brief becomes the first (structured) user message; the
@@ -966,12 +972,10 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
         <>
           {/* Messages */}
           <MessageList
-            onResend={(key) => void sendText({ resendKey: key })}
-            onRegenerate={(key) => void sendText({ regenerateKey: key })}
+            onResend={handleResend}
+            onRegenerate={handleRegenerate}
             saveToProjectId={threadProjectId}
-            onSaveAsBrief={
-              isProjectThread ? (content) => handleSaveAsBrief(content) : undefined
-            }
+            onSaveAsBrief={isProjectThread ? handleSaveAsBrief : undefined}
           />
 
           {/* Per-send source picking (D4): choose which sources ride the
@@ -982,23 +986,10 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
           {/* Input: the manifest is the SAME prepared request the send
               will use (including awaited brief/source hydration and
               pending uploads). */}
-          {previewContext && (
-            <details className="px-4 sm:px-6 shrink-0">
-              <summary className="cursor-pointer select-none text-[11px] text-text-muted hover:text-text-secondary">
-                What will be sent? ≈ {previewContext.tokenEstimate.toLocaleString()} tokens
-              </summary>
-              <div className="mt-2 mb-2 rounded-lg border border-border bg-surface-alt p-3">
-                <WhatWillBeSent compiled={previewContext} />
-              </div>
-            </details>
-          )}
-          <MessageInput
-            value={inputValue}
-            onChange={setDraft}
+          <ChatComposer
             onSend={handleSend}
             onStop={handleStop}
             disabled={isSending}
-            tokenEstimate={tokenEstimate}
             attachedTexts={attachments}
             onOpenPicker={() => setPickerOpen(true)}
             onRemoveAttachment={(id) =>
