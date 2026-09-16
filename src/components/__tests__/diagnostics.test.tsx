@@ -26,7 +26,9 @@ describe("DiagnosticsDialog (5.5b)", () => {
     const rows = screen.getAllByRole("row");
     expect(rows).toHaveLength(5);
     expect(rows[1].textContent).toContain("request-size");
-    expect(rows[1].textContent).toMatch(/4\s?200 chars/);
+    // Locale-agnostic: `toLocaleString` may group as "4 200" (NBSP) or
+    // "4,200" depending on the runner locale.
+    expect(rows[1].textContent).toMatch(/4[^\d]?200 chars/);
     expect(rows[4].textContent).toContain("ttft");
     expect(screen.getByText("4 marks")).toBeTruthy();
 
