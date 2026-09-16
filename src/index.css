@@ -18,6 +18,7 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-surface: var(--surface);
+  --color-surface-alt: var(--surface-alt);
   --color-field: var(--field);
   --color-border: var(--border);
   --color-primary: var(--primary);
@@ -37,8 +38,11 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-warning: var(--warning);
+  --color-on-warning: var(--on-warning);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-selection: var(--selection);
   --font-sans: "Geist Variable", system-ui, -apple-system, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, monospace;
   --font-doc: "Source Serif 4 Variable", Georgia, "Times New Roman", serif;
@@ -65,10 +69,14 @@
   --accent-foreground: #ffffff;
   --destructive: #b91c1c;
   --destructive-foreground: #ffffff;
+  --warning: #b45309;
+  --on-warning: #ffffff;
   --border: #e3ddd2;
   --input: #e3ddd2;
   --ring: #0f6e5c;
+  --selection: #ddeae4;
   --surface: #ffffff;
+  --surface-alt: #f1ece4;
   --field: #f1ede6;
   --text-primary: #1f1b15;
   --text-secondary: #6b6357;
@@ -108,10 +116,14 @@
   --accent-foreground: #0d2b22;
   --destructive: #f87171;
   --destructive-foreground: #330b0b;
+  --warning: #fbbf24;
+  --on-warning: #2a1e02;
   --border: #3a352c;
   --input: #3a352c;
   --ring: #34d399;
+  --selection: #24312c;
   --surface: #1e1b17;
+  --surface-alt: #282419;
   --field: #262219;
   --text-primary: #f2ede4;
   --text-secondary: #a8a094;
@@ -203,26 +215,33 @@
 
 /* ============================================================
    Library documents — the reading view renders saved texts as
-   full documents: serif at DESIGN.md doc-lg (17px/1.75), on the
+   full documents: serif at DESIGN.md doc-lg (18px/1.7), on the
    doc-column width. Same table styling as chat documents.
    ============================================================ */
 .doc-markdown {
   font-family: var(--font-doc);
   color: var(--text-primary);
-  font-size: 1.0625rem;
-  line-height: 1.75;
+  font-size: 1.125rem;
+  line-height: 1.7;
 }
 .doc-markdown h1,
 .doc-markdown h2,
-.doc-markdown h3 {
-  font-family: var(--font-sans);
+.doc-markdown h3,
+.doc-markdown h4,
+.doc-markdown h5,
+.doc-markdown h6 {
+  /* DESIGN.md: manuscript headings stay in the document voice. */
+  font-family: var(--font-doc);
   font-weight: 600;
   letter-spacing: -0.01em;
   margin: 1.5em 0 0.5em;
 }
-.doc-markdown h1 { font-size: 1.35rem; }
-.doc-markdown h2 { font-size: 1.2rem; }
-.doc-markdown h3 { font-size: 1.05rem; }
+.doc-markdown h1 { font-size: 1.5556rem; }
+.doc-markdown h2 { font-size: 1.2222rem; }
+.doc-markdown h3 { font-size: 1rem; }
+.doc-markdown h4,
+.doc-markdown h5,
+.doc-markdown h6 { font-size: 1rem; }
 .doc-markdown p { margin: 0.75em 0; }
 .doc-markdown table {
   width: 100%;
@@ -246,4 +265,284 @@
 }
 .doc-markdown tbody tr:nth-child(even) td {
   background: var(--field);
+}
+
+/* ============================================================
+   Rich manuscript editor (ProseMirror, Phase 4)
+   ============================================================
+   The .rich-doc element is the editable manuscript surface. Typography
+   follows DESIGN.md: Source Serif 4 for prose, 65–75ch measure (the 720px
+   column above), user-adjustable base size (font-size set inline by the
+   pane wrapper; this rule inherits it).
+   */
+.rich-doc {
+  font-family: var(--font-doc);
+  color: var(--text-primary);
+  font-size: inherit;
+  line-height: 1.75;
+  outline: none;
+  min-height: 40vh;
+  caret-color: var(--primary);
+}
+
+/* Visible keyboard focus on the manuscript surface (DESIGN.md: a 2px
+   primary ring at 50%, always visible for keyboard users). */
+.rich-doc:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 50%, transparent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.rich-doc > * + * {
+  margin-top: 0.75em;
+}
+
+.rich-doc p {
+  margin: 0;
+}
+
+.rich-doc h1,
+.rich-doc h2,
+.rich-doc h3,
+.rich-doc h4,
+.rich-doc h5,
+.rich-doc h6 {
+  /* DESIGN.md: manuscript headings are serif, stepping down from the
+     manuscript size (28/22/18px at the 18px default). */
+  font-family: var(--font-doc);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  margin: 1.4em 0 0.4em;
+}
+.rich-doc h1 { font-size: 1.5556em; }
+.rich-doc h2 { font-size: 1.2222em; }
+.rich-doc h3 { font-size: 1em; }
+.rich-doc h4,
+.rich-doc h5,
+.rich-doc h6 { font-size: 1em; }
+
+.rich-doc ul,
+.rich-doc ol {
+  padding-left: 1.5em;
+  margin: 0.6em 0;
+}
+/* Tailwind's preflight strips list markers; the manuscript needs them
+   back (B20c). */
+.rich-doc ul { list-style: disc; }
+.rich-doc ul ul { list-style: circle; }
+.rich-doc ul ul ul { list-style: square; }
+.rich-doc ol { list-style: decimal; }
+.rich-doc ol ol { list-style: lower-alpha; }
+.rich-doc ol ol ol { list-style: lower-roman; }
+.rich-doc li::marker { color: var(--text-secondary); }
+.rich-doc li { margin: 0.25em 0; }
+.rich-doc li p { margin: 0; }
+
+.rich-doc blockquote {
+  border-left: 3px solid var(--primary);
+  padding-left: 1em;
+  margin: 1em 0;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.rich-doc pre {
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75em 1em;
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  line-height: 1.6;
+  overflow-x: auto;
+  margin: 1em 0;
+}
+.rich-doc code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--field);
+  border-radius: 4px;
+  padding: 0.1em 0.3em;
+}
+.rich-doc pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.rich-doc a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.rich-doc hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.5em 0;
+}
+
+.rich-doc strong { font-weight: 650; }
+
+/* Citation nodes (Phase 5.4b): subtle author-date markers linked to the
+   user's own source records. The reader (.doc-markdown) shows the same
+   atoms through the source-atom rehype plugin (B10). */
+.rich-doc .citation-node,
+.doc-markdown .citation-node {
+  font-family: var(--font-sans);
+  font-size: 0.72em;
+  color: var(--text-secondary);
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.05em 0.5em;
+  white-space: nowrap;
+}
+
+/* Footnote markers (Phase 5.4e, B19): superscript numbers carrying their
+   content in the node. In the editor a click opens the edit popover; in
+   the reader the hover title shows the text and the Notes list below the
+   article shows every note. */
+.rich-doc .footnote-node,
+.doc-markdown .footnote-node {
+  font-family: var(--font-sans);
+  font-size: 0.72em;
+  color: var(--text-secondary);
+  vertical-align: super;
+  line-height: 0;
+  margin: 0 0.1em;
+  cursor: pointer;
+}
+
+.doc-markdown .footnote-node {
+  cursor: default;
+}
+
+/* Inline footnote text editing popover (B19): anchored to the marker,
+   written back into the node on Save/Enter. */
+.footnote-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 240px;
+  max-width: 360px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.footnote-editor-input {
+  width: 100%;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--field);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.footnote-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.footnote-editor-actions button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-alt);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.footnote-editor-actions button:first-child {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+}
+
+/* Tables (tiptap table kit): editable cells with a selected-cell tint. */
+.rich-doc table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+  table-layout: fixed;
+  overflow: hidden;
+}
+.rich-doc th,
+.rich-doc td {
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.65rem;
+  vertical-align: top;
+  position: relative;
+  font-size: 0.9em;
+  line-height: 1.5;
+}
+.rich-doc th {
+  background: var(--field);
+  font-weight: 600;
+  text-align: left;
+}
+.rich-doc .selectedCell:after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  pointer-events: none;
+}
+.rich-doc .column-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -2px;
+  width: 4px;
+  background: var(--primary);
+  cursor: col-resize;
+}
+.rich-doc.resize-cursor {
+  cursor: col-resize;
+}
+.rich-doc table p { margin: 0; }
+
+/* Placeholder for the first empty paragraph (tiptap Placeholder parity). */
+.rich-doc p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+  height: 0;
+  float: left;
+}
+
+/* Gap cursor between blocks (StarterKit gapcursor). */
+.rich-doc .ProseMirror-gapcursor {
+  display: none;
+  pointer-events: none;
+  position: absolute;
+}
+.rich-doc.ProseMirror-focused .ProseMirror-gapcursor,
+.rich-doc .ProseMirror-gapcursor.ProseMirror-gapcursor-visible {
+  display: block;
+}
+
+/* DESIGN.md — reduced motion: non-essential animation is disabled when
+   the OS requests it (the streaming cursor stops blinking, transitions
+   collapse to instant). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

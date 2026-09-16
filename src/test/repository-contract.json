@@ -1,0 +1,73 @@
+{
+  "comment": [
+    "Shared JSON contract fixtures for the repository wire format.",
+    "Frontend tests assert the SQLite adapter produces exactly these payloads;",
+    "Rust serde tests (src-tauri/src/repository.rs) assert these deserialize.",
+    "Keep both sides in sync when changing the contract."
+  ],
+  "threadMeta": {
+    "id": "th-1",
+    "title": "On extractive citation — ça / 東京",
+    "mode": "text",
+    "projectId": null,
+    "references": "Fanon, Black Skin, White Masks (1952).",
+    "rev": 0,
+    "archived": false,
+    "pinned": false,
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-02T00:00:00.000Z"
+  },
+  "threadMetaProject": {
+    "id": "th-2",
+    "title": "Brief agent",
+    "mode": "project",
+    "projectId": "p-1",
+    "references": null,
+    "rev": 0,
+    "archived": false,
+    "pinned": false,
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-02T00:00:00.000Z"
+  },
+  "threadMetaLegacy": {
+    "id": "th-3",
+    "title": "Old backup row",
+    "refs": "Said, Orientalism (1978).",
+    "createdAt": "2025-01-01T00:00:00.000Z",
+    "updatedAt": "2025-01-02T00:00:00.000Z"
+  },
+  "projectMeta": {
+    "id": "p-1",
+    "title": "Dissertation — 東京 conversations",
+    "description": null,
+    "defaultAudience": "academics",
+    "defaultTone": null,
+    "defaultCitations": "apa",
+    "defaultLanguage": null,
+    "references": "Spivak, Can the Subaltern Speak? (1988).",
+    "briefWordCount": null,
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-02T00:00:00.000Z"
+  },
+  "projectMetaLegacy": {
+    "id": "p-2",
+    "title": "Old backup project",
+    "refs": "Césaire, Discourse on Colonialism (1950).",
+    "createdAt": "2025-01-01T00:00:00.000Z",
+    "updatedAt": "2025-01-02T00:00:00.000Z"
+  },
+  "textMeta": {
+    "id": "t-1",
+    "title": "Chapter draft — ça",
+    "textType": "essay",
+    "folder": null,
+    "projectId": "p-1",
+    "snippet": null,
+    "wordCount": 1200,
+    "rev": 0,
+    "archived": false,
+    "pinned": false,
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-02T00:00:00.000Z"
+  }
+}

@@ -1,15 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useChatStore, messageKey, type ChatMessage, type FileAttachment } from "@/stores/chatStore";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useChatStore, type FileAttachment } from "@/stores/chatStore";
+import { useAppStore } from "@/stores/useAppStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useProjectStore } from "@/stores/projectStore";
-import { sendMessage } from "@/utils/api";
+import { sendChatMessage } from "@/services/chatSend";
 import {
-  buildSystemPrompt,
-  buildProjectBriefPrompt,
-  composeProjectStartMessage,
-} from "@/utils/systemPrompt";
+  abortOperation,
+  activeOperationForThread,
+} from "@/services/aiOperations";
+import { useThreadOperation } from "@/components/chat/useThreadOperation";
+import { composeProjectStartMessage } from "@/utils/systemPrompt";
+import { displayTextFromBody } from "@/utils/documentCodec";
+import { usePreparedPreview } from "@/components/chat/usePreparedPreview";
+import WhatWillBeSent from "@/components/chat/WhatWillBeSent";
+import { useSourceStore } from "@/stores/sourceStore";
 import { parseFile } from "@/utils/fileParse";
-import { estimateTokens } from "@/utils/tokens";
 import ChatSettings from "@/components/chat/ChatSettings";
 import MessageList from "@/components/chat/MessageList";
 import MessageInput from "@/components/chat/MessageInput";
@@ -36,8 +41,6 @@ import {
 } from "@/components/ui/select";
 import type {
   AttachedLibraryText,
-  ProjectMeta,
-  ThreadMeta,
   ThreadMode,
   WritingBrief,
 } from "@/types";
@@ -56,33 +59,6 @@ import BriefForm from "@/components/chat/BriefForm";
 interface ChatTabProps {
   /** Opens the general Settings dialog (used to configure the API). */
   onOpenSettings: () => void;
-}
-
-/**
- * Collect the reference entries for a thread: its own free-text
- * references plus, when linked, its project's. Used for both the token
- * estimate and the actual send, so the two always agree.
- */
-function collectReferences(
-  thread: ThreadMeta | null | undefined,
-  project: ProjectMeta | null | undefined,
-): { source: string; content: string }[] {
-  const refs: { source: string; content: string }[] = [];
-  const threadRefs = thread?.references?.trim();
-  if (threadRefs) {
-    refs.push({
-      source: "References for this text (provided before the chat started)",
-      content: threadRefs,
-    });
-  }
-  const projectRefs = project?.references?.trim();
-  if (projectRefs) {
-    refs.push({
-      source: `References of project “${project!.title}”`,
-      content: projectRefs,
-    });
-  }
-  return refs;
 }
 
 /** Empty-thread picker: what should this conversation do? */
@@ -124,6 +100,82 @@ function ModePicker({ onPick }: { onPick: (mode: ThreadMode) => void }) {
   );
 }
 
+/** Per-send source picking (D4): the user picks WHICH sources ride the
+ * next send. Until a pick is made, the default scope rides (per-source
+ * inclusion checkboxes); the first interaction seeds from that set. The
+ * "What will be sent?" manifest reports the exact result. */
+function SendSourcePicker({
+  scopedSources,
+  threadId,
+}: {
+  scopedSources: { id: string; title: string; included: boolean }[];
+  threadId: string | null;
+}) {
+  const picks = useChatStore((s) => (threadId ? s.threadSourcePicks[threadId] : undefined));
+  const setPick = useChatStore((s) => s.setThreadSourcePick);
+  const clearPick = useChatStore((s) => s.clearThreadSourcePick);
+  const [open, setOpen] = useState(false);
+
+  // A pick exists whenever the key is present (an EMPTY pick means
+  // "send none" — it is an explicit choice, not a reset).
+  const override = picks !== undefined;
+  const pickedSet = new Set(picks ?? []);
+  const effective = (id: string): boolean =>
+    override ? pickedSet.has(id) : (scopedSources.find((s) => s.id === id)?.included ?? false);
+  const riding = scopedSources.filter((s) => effective(s.id)).length;
+
+  const toggle = (id: string) => {
+    if (!threadId) return;
+    // First interaction seeds the pick from the CURRENT effective set.
+    const current = new Set(
+      override
+        ? (picks as string[])
+        : scopedSources.filter((s) => s.included).map((s) => s.id),
+    );
+    if (current.has(id)) current.delete(id);
+    else current.add(id);
+    setPick(threadId, [...current]);
+  };
+
+  return (
+    <details
+      className="px-4 sm:px-6 shrink-0"
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="cursor-pointer select-none text-[11px] text-text-muted hover:text-text-secondary">
+        Sources for this conversation — {riding} of {scopedSources.length} ride
+        {override ? " (picked; reset below to follow the Sources panel)" : ""}
+      </summary>
+      <div className="mt-2 mb-2 rounded-lg border border-border bg-surface-alt p-3 space-y-2">
+        {scopedSources.map((s) => (
+          <label
+            key={s.id}
+            className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              checked={effective(s.id)}
+              onChange={() => toggle(s.id)}
+              className="accent-primary"
+            />
+            <span className="truncate">{s.title}</span>
+          </label>
+        ))}
+        {override && (
+          <button
+            type="button"
+            onClick={() => threadId && clearPick(threadId)}
+            className="text-[11px] text-primary hover:underline"
+          >
+            Reset — use your Sources-panel choices again
+          </button>
+        )}
+      </div>
+    </details>
+  );
+}
+
 export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   // ── Stores ──
   const configLoaded = useChatStore((s) => s.configLoaded);
@@ -138,22 +190,22 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
 
   const activeThreadId = useChatStore((s) => s.activeThreadId);
   const threadLoaded = useChatStore((s) => s.threadLoaded);
-  const switchThread = useChatStore((s) => s.switchThread);
-  const addMessage = useChatStore((s) => s.addMessage);
-  const updateMessage = useChatStore((s) => s.updateMessage);
   const brief = useChatStore((s) => s.brief);
   const setBrief = useChatStore((s) => s.setBrief);
   const setThreadMode = useChatStore((s) => s.setThreadMode);
   const setConfig = useChatStore((s) => s.setConfig);
-  const isSending = useChatStore((s) => s.isSending);
-  const setIsSending = useChatStore((s) => s.setIsSending);
+  // Busy/stop belong to THIS conversation's operation (B15): a request in
+  // another conversation neither disables this composer nor shows here.
+  const operation = useThreadOperation(activeThreadId);
+  const isSending = !!operation;
   const setError = useChatStore((s) => s.setError);
-  const setStreamingText = useChatStore((s) => s.setStreamingText);
   const inputValue = useChatStore(
     (s) => s.drafts[s.activeThreadId ?? ""] ?? "",
   );
   const setDraft = useChatStore((s) => s.setDraft);
   const messages = useChatStore((s) => s.messages);
+  // The single conversation navigation action (route + owner load).
+  const openDiscussion = useAppStore((s) => s.openDiscussion);
 
   // ── Projects ──
   const projects = useProjectStore((s) => s.projects);
@@ -167,12 +219,46 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   const libraryTexts = useLibraryStore((s) => s.texts);
   const libraryTextsLoaded = useLibraryStore((s) => s.textsLoaded);
   const clearPendingAttach = useLibraryStore((s) => s.clearPendingAttach);
-  const [attachments, setAttachments] = useState<AttachedLibraryText[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
 
   // ── Uploaded documents (extracted text, applied to the next send) ──
-  const [fileAttachments, setFileAttachments] = useState<FileAttachment[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
+
+  // Composer attachments live PER THREAD in the store: navigating to
+  // another conversation (or a parse finishing after navigation) can
+  // never migrate an attachment.
+  const threadAttachments = useChatStore((s) => s.threadAttachments);
+  const activeThreadIdForAttachments = useChatStore((s) => s.activeThreadId);
+  const attachmentSlot =
+    threadAttachments[activeThreadIdForAttachments ?? ""] ??
+    ({ library: [], files: [] } as {
+      library: AttachedLibraryText[];
+      files: FileAttachment[];
+    });
+  const attachments = attachmentSlot.library;
+  const fileAttachments = attachmentSlot.files;
+  const setAttachments = (
+    updater:
+      | AttachedLibraryText[]
+      | ((prev: AttachedLibraryText[]) => AttachedLibraryText[]),
+  ) => {
+    if (!activeThreadIdForAttachments) return;
+    const next =
+      typeof updater === "function" ? updater(attachmentSlot.library) : updater;
+    useChatStore
+      .getState()
+      .setThreadAttachments(activeThreadIdForAttachments, { library: next });
+  };
+  const setFileAttachments = (
+    updater: FileAttachment[] | ((prev: FileAttachment[]) => FileAttachment[]),
+  ) => {
+    if (!activeThreadIdForAttachments) return;
+    const next =
+      typeof updater === "function" ? updater(attachmentSlot.files) : updater;
+    useChatStore
+      .getState()
+      .setThreadAttachments(activeThreadIdForAttachments, { files: next });
+  };
 
   const activeThread = threads.find((t) => t.id === activeThreadId) ?? null;
   const threadMode: ThreadMode = activeThread?.mode ?? "text";
@@ -184,16 +270,12 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   /** Derived empty-thread choice: which project the text belongs to. */
   const textProjectChoice = threadProjectId ?? "standalone";
 
-  // ── Project brief inclusion toggle (text threads in a project) ──
-  const [briefIncludedByThread, setBriefIncludedByThread] = useState<
-    Record<string, boolean>
-  >({});
+  // The project brief inclusion toggle (text threads in a project)
+  // Shared store state: every chat surface must agree on inclusion.
+  const briefIncludedByThread = useChatStore((s) => s.briefIncludedByThread);
   const projectBriefIncluded = threadProjectId
     ? (briefIncludedByThread[threadProjectId] ?? true)
     : false;
-
-  // The project brief content itself (loaded on demand).
-  const [projectBriefContent, setProjectBriefContent] = useState<string>("");
 
   // Drop attachments whose underlying text was deleted in the library.
   useEffect(() => {
@@ -211,13 +293,20 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
     const store = useLibraryStore.getState();
     const meta = store.texts.find((t) => t.id === id);
     if (!meta) return;
-    const content = await store.loadTextContent(id);
+    // Attach the PLAIN TEXT projection — a structured payload is never
+    // sent to the model as manuscript prose.
+    const body = await store.loadTextContent(id);
     setAttachments((prev) =>
       prev.some((a) => a.id === id)
         ? prev
         : [
             ...prev,
-            { id: meta.id, title: meta.title, textType: meta.textType, content },
+            {
+              id: meta.id,
+              title: meta.title,
+              textType: meta.textType,
+              content: displayTextFromBody(body),
+            },
           ],
     );
   }, []);
@@ -258,6 +347,11 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
                 },
               ],
         );
+        // Empty scans and truncation are reported explicitly, not silently
+        // attached as if they carried content.
+        if (parsed.warning) {
+          setError(`${file.name}: ${parsed.warning}`);
+        }
       } catch (err) {
         setError(
           err instanceof Error
@@ -269,57 +363,33 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
     setUploadingFiles(false);
   }, [setError]);
 
-  // ── Live estimate of the input tokens the next send would consume ──
-  const threadFiles = useMemo(
-    () => messages.flatMap((m) => m.fileAttachments ?? []),
-    [messages],
+  // Sources in scope for this conversation (project-linked when the
+  // thread has a project; standalone sources otherwise), with their
+  // user-controlled inclusion flags — the compiler marks excluded ones.
+  // Select the STABLE store array, then derive: a selector that filters/
+  // maps returns a new array on every snapshot read and makes Zustand's
+  // useSyncExternalStore see an unstable snapshot.
+  const allSources = useSourceStore((s) => s.sources);
+  const scopedSources = useMemo(
+    () =>
+      allSources
+        .filter((src) =>
+          threadProjectId ? src.projectId === threadProjectId : !src.projectId,
+        )
+        .map((src) => ({
+          id: src.id,
+          title: src.title,
+          content: src.originalText,
+          included: src.includedInContext,
+        })),
+    [allSources, threadProjectId],
   );
 
-  /** Reference entries for the active thread: its own + the project's. */
-  const activeReferences = useMemo(
-    () => collectReferences(activeThread, threadProject),
-    [activeThread, threadProject],
-  );
-
-  const tokenEstimate = useMemo(() => {
-    const prompt = isProjectThread
-      ? buildProjectBriefPrompt({
-          references: threadProject?.references ?? null,
-        })
-      : buildSystemPrompt({
-          mode: config.systemPromptMode ?? "standard",
-          customPrompt: config.customSystemPrompt ?? "",
-          deepResearch: config.deepResearchEnabled ?? false,
-          brief,
-          attachedTexts: attachments.map(({ title, textType, content }) => ({
-            title,
-            textType,
-            content,
-          })),
-          projectBriefContent:
-            threadProjectId && projectBriefIncluded ? projectBriefContent : null,
-          uploadedFiles: threadFiles,
-          references: activeReferences,
-        });
-    const historyText = messages.map((m) => m.content).join("\n");
-    return estimateTokens(`${prompt}\n${historyText}\n${inputValue}`);
-  }, [
-    messages,
-    inputValue,
-    isProjectThread,
-    config.systemPromptMode,
-    config.customSystemPrompt,
-    config.deepResearchEnabled,
-    brief,
-    attachments,
-    threadProjectId,
-    projectBriefIncluded,
-    projectBriefContent,
-    threadFiles,
-    activeReferences,
-    threadProject,
-  ]);
-
+  // The preview and the send share ONE prepared request (B14): the
+  // manifest below is the compiled output of exactly what will be sent,
+  // including awaited brief/source hydration and pending uploads.
+  const previewContext = usePreparedPreview();
+  const tokenEstimate = previewContext?.tokenEstimate ?? 0;
   // ── Input state ──
   const [showConfig, setShowConfig] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -339,8 +409,8 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   const [seedIdeas, setSeedIdeas] = useState("");
   const [seedReferences, setSeedReferences] = useState("");
 
-  // Aborts the in-flight generation (used by the Stop button / Escape).
-  const controllerRef = useRef<AbortController | null>(null);
+  // The abort controller lives in the chat store: switching tabs remounts
+  // this component, and a ref here died with it while the request ran on.
 
   // ── Load on mount ──
   useEffect(() => {
@@ -370,27 +440,10 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
     })();
   }, [pendingBriefProjectId, clearPendingBriefChat, createThread, setThreadMode]);
 
-  // ── Load the linked project's brief when it changes ──
-  useEffect(() => {
-    let cancelled = false;
-    if (!threadProjectId) {
-      setProjectBriefContent("");
-      return;
-    }
-    void useProjectStore
-      .getState()
-      .loadBriefContent(threadProjectId)
-      .then((content) => {
-        if (!cancelled) setProjectBriefContent(content);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [threadProjectId]);
-
   // ── Reset per-thread input state when switching threads ──
+  // (Composer drafts AND attachments live per thread in the store and
+  // follow the navigation automatically; only start-panel state resets.)
   useEffect(() => {
-    setFileAttachments([]);
     setProjectChoice(activeThread?.projectId ?? "__new__");
     setSeedTitle("");
     setSeedDescription("");
@@ -412,7 +465,12 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
 
   // ── Stop generation (Stop button / Escape key) ──
   const handleStop = useCallback(() => {
-    controllerRef.current?.abort();
+    // The operation service aborts the owner's request; the op's own
+    // buffer keeps the partial output for the stop-commit.
+    const owner = useChatStore.getState().activeThreadId;
+    if (!owner) return;
+    const running = activeOperationForThread(owner);
+    if (running) abortOperation(running.id);
   }, []);
 
   useEffect(() => {
@@ -426,206 +484,19 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isSending, handleStop]);
 
-  // ── Send a message to the chat ──
-  // Three modes:
-  // - default: `text` is added as a new user message and sent.
-  // - `resendKey`: an existing failed user message is sent again in place
-  //   (no duplicate is created; the failed marker is cleared on the way out).
-  // - `regenerateKey`: the given assistant message is dropped from the
-  //   request history and generated anew; on success it is replaced in
-  //   place, and on failure the old reply is kept.
+  // -- Send a message to the chat --
+  // The send pipeline lives in the chatSend service (shared with the
+  // compact assistant); this view only forwards user intent.
   const sendText = useCallback(
-    async (
-      opts: {
-        text?: string;
-        resendKey?: string;
-        regenerateKey?: string;
-        files?: FileAttachment[];
-      } = {},
-    ) => {
-      const isResend = !!opts.resendKey;
-      const isRegenerate = !!opts.regenerateKey;
-
-      if (isSending || !activeThreadId) return;
-
-      let trimmed = "";
-      if (isResend || isRegenerate) {
-        const store = useChatStore.getState();
-        const target = store.messages.find(
-          (m) => messageKey(m) === (opts.resendKey ?? opts.regenerateKey),
-        );
-        if (!target || !target.content.trim()) return;
-        trimmed = target.content.trim();
-      } else {
-        trimmed = (opts.text ?? "").trim();
-      }
-      if (!trimmed) return;
-
-      // Clear the input only for a freshly typed send; re-sends and
-      // regenerations reuse a message that is already in the thread.
-      if (!isResend && !isRegenerate) {
-        setDraft("");
-      }
-
-      // A re-send clears the failed marker immediately so the button
-      // disappears while the request is in flight.
-      if (isResend) {
-        updateMessage(opts.resendKey!, (m) => ({ ...m, failed: false }));
-      }
-
-      // Add the user message only for a fresh send; re-sends reuse the
-      // message already in the thread, regenerations keep the old reply
-      // until the new one is ready. Uploaded documents travel with it.
-      let userMsg: ChatMessage | null = null;
-      if (!isResend && !isRegenerate) {
-        const files = opts.files ?? fileAttachments;
-        userMsg = {
-          role: "user",
-          content: trimmed,
-          timestamp: new Date().toISOString(),
-          ...(files.length > 0 ? { fileAttachments: files } : {}),
-        };
-        addMessage(userMsg);
-      }
-
-      // Send to API
-      const controller = new AbortController();
-      controllerRef.current = controller;
-      setStreamingText("");
-      setIsSending(true);
-      setError(null);
-
-      const currentConfig = useChatStore.getState().config;
-      const state = useChatStore.getState();
-      const sendThread = state.threads.find((t) => t.id === state.activeThreadId);
-      const sendMode: ThreadMode = sendThread?.mode ?? "text";
-      const sendProjectId = sendThread?.projectId ?? null;
-
-      let systemPrompt: string;
-      const sendProject = sendProjectId
-        ? useProjectStore
-            .getState()
-            .projects.find((p) => p.id === sendProjectId)
-        : null;
-      if (sendMode === "project") {
-        systemPrompt = buildProjectBriefPrompt({
-          references: sendProject?.references ?? null,
-        });
-      } else {
-        let sendBriefContent = "";
-        if (sendProjectId && (briefIncludedByThread[sendProjectId] ?? true)) {
-          sendBriefContent = await useProjectStore
-            .getState()
-            .loadBriefContent(sendProjectId);
-        }
-        systemPrompt = buildSystemPrompt({
-          mode: currentConfig.systemPromptMode ?? "standard",
-          customPrompt: currentConfig.customSystemPrompt ?? "",
-          deepResearch: currentConfig.deepResearchEnabled ?? false,
-          brief: state.brief,
-          attachedTexts: attachments.map(({ title, textType, content }) => ({
-            title,
-            textType,
-            content,
-          })),
-          projectBriefContent: sendBriefContent || null,
-          uploadedFiles: state.messages.flatMap((m) => m.fileAttachments ?? []),
-          references: collectReferences(sendThread, sendProject),
-        });
-      }
-
-      const threadAtSend = useChatStore.getState().activeThreadId;
-      const { messages: messagesAtSend } = useChatStore.getState();
-      // A regeneration drops the old reply from the history so the model
-      // answers afresh; the stored message itself stays until replaced.
-      const history = isRegenerate
-        ? messagesAtSend.filter((m) => messageKey(m) !== opts.regenerateKey)
-        : messagesAtSend;
-      const result = await sendMessage(
-        history,
-        currentConfig,
-        systemPrompt,
-        {
-          signal: controller.signal,
-          onDelta: (chunk) => {
-            // Only render text while still in the thread it was sent from.
-            if (useChatStore.getState().activeThreadId === threadAtSend) {
-              setStreamingText((prev) => prev + chunk);
-            }
-          },
-        },
-      );
-
-      // Drop the reply if the user switched threads while it was in flight
-      if (useChatStore.getState().activeThreadId !== threadAtSend) {
-        setIsSending(false);
-        setStreamingText("");
-        controllerRef.current = null;
-        return;
-      }
-
-      if (result.error) {
-        // The user's message did not land: flag it so it can be re-sent in
-        // place. A regeneration keeps the old reply untouched.
-        if (!isRegenerate) {
-          const failedKey = opts.resendKey ?? (userMsg ? messageKey(userMsg) : null);
-          if (failedKey) {
-            updateMessage(failedKey, (m) => ({ ...m, failed: true }));
-          }
-        }
-        setError(result.error);
-        setIsSending(false);
-        setStreamingText("");
-      } else if (result.stopped) {
-        // User stopped mid-answer: keep whatever was generated so far.
-        const partial = useChatStore.getState().streamingText;
-        if (partial.trim()) {
-          if (isRegenerate) {
-            updateMessage(opts.regenerateKey!, (m) => ({ ...m, content: partial }));
-          } else {
-            addMessage({
-              role: "assistant",
-              content: partial,
-              timestamp: new Date().toISOString(),
-            });
-          }
-        }
-        setStreamingText("");
-        setIsSending(false);
-      } else {
-        if (isRegenerate) {
-          updateMessage(opts.regenerateKey!, (m) => ({ ...m, content: result.content }));
-        } else {
-          addMessage({
-            role: "assistant",
-            content: result.content,
-            timestamp: new Date().toISOString(),
-          });
-        }
-        setStreamingText("");
-        setIsSending(false);
-      }
-      // Library attachments apply to the send that used them: clear them
-      // once the request landed (kept on error so a retry reuses them).
-      if (!result.error) {
-        setAttachments([]);
-        setFileAttachments([]);
-      }
-      controllerRef.current = null;
+    (opts: {
+      text?: string;
+      resendKey?: string;
+      regenerateKey?: string;
+      files?: FileAttachment[];
+    } = {}) => {
+      void sendChatMessage(opts);
     },
-    [
-      isSending,
-      activeThreadId,
-      addMessage,
-      updateMessage,
-      setIsSending,
-      setError,
-      setStreamingText,
-      setDraft,
-      attachments,
-      fileAttachments,
-      briefIncludedByThread,
-    ],
+    [],
   );
 
   // ── Handle send ──
@@ -731,7 +602,6 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
       await useProjectStore.getState().updateProject(threadProjectId, {
         briefContent: content,
       });
-      setProjectBriefContent(content);
     },
     [threadProjectId],
   );
@@ -739,9 +609,13 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   // ── Handle thread deletion ──
   const handleDeleteThread = useCallback(() => {
     if (!activeThreadId) return;
-    void deleteThread(activeThreadId);
+    void deleteThread(activeThreadId).then(() => {
+      // Deletion may have selected/created a replacement owner: keep the
+      // route in sync through the same navigation action.
+      openDiscussion(useChatStore.getState().activeThreadId);
+    });
     setConfirmDelete(false);
-  }, [activeThreadId, deleteThread]);
+  }, [activeThreadId, deleteThread, openDiscussion]);
 
   // ── Show loading state while restoring config ──
   if (!configLoaded || !threadsLoaded) {
@@ -804,10 +678,11 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
       {/* Header */}
       <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-border shrink-0">
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          {/* Thread switcher */}
+          {/* Thread switcher: navigation goes through the single
+              conversation action so the workspace route follows. */}
           <Select
             value={activeThreadId ?? undefined}
-            onValueChange={(v) => void switchThread(v)}
+            onValueChange={(v) => openDiscussion(v)}
           >
             <SelectTrigger
               className="min-w-0 max-w-[420px] flex-1 bg-transparent border-transparent shadow-none hover:bg-surface data-[size=default]:h-8"
@@ -853,7 +728,9 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => void createThread()}
+            onClick={() =>
+              void createThread().then((id) => openDiscussion(id))
+            }
             title="New conversation"
             aria-label="New conversation"
             disabled={isSending}
@@ -1084,11 +961,28 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
             onRegenerate={(key) => void sendText({ regenerateKey: key })}
             saveToProjectId={threadProjectId}
             onSaveAsBrief={
-              isProjectThread ? (content) => void handleSaveAsBrief(content) : undefined
+              isProjectThread ? (content) => handleSaveAsBrief(content) : undefined
             }
           />
 
-          {/* Input */}
+          {/* Per-send source picking (D4): choose which sources ride the
+              next send; the manifest below reports the result exactly. */}
+          {scopedSources.length > 0 && (
+            <SendSourcePicker scopedSources={scopedSources} threadId={activeThreadId} />
+          )}
+          {/* Input: the manifest is the SAME prepared request the send
+              will use (including awaited brief/source hydration and
+              pending uploads). */}
+          {previewContext && (
+            <details className="px-4 sm:px-6 shrink-0">
+              <summary className="cursor-pointer select-none text-[11px] text-text-muted hover:text-text-secondary">
+                What will be sent? ≈ {previewContext.tokenEstimate.toLocaleString()} tokens
+              </summary>
+              <div className="mt-2 mb-2 rounded-lg border border-border bg-surface-alt p-3">
+                <WhatWillBeSent compiled={previewContext} />
+              </div>
+            </details>
+          )}
           <MessageInput
             value={inputValue}
             onChange={setDraft}
@@ -1114,10 +1008,7 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
             onToggleProjectBrief={
               threadProjectId
                 ? () =>
-                    setBriefIncludedByThread((prev) => ({
-                      ...prev,
-                      [threadProjectId]: !(prev[threadProjectId] ?? true),
-                    }))
+                    useChatStore.getState().toggleBriefInclude(threadProjectId)
                 : undefined
             }
           />

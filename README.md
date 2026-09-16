@@ -20,8 +20,10 @@ Built with **Tauri 2**, **React 19**, **TypeScript**, **Vite**, **Zustand**,
 - **Web research tools** — the agent can use `web_search` / `fetch_page` to
   check facts and sources while you work (toggle in the chat settings).
 - **Settings** — light/dark theme and a custom accent colour.
-- **Backup & restore** — export all your data (conversations, settings, API
-  config) to a single JSON file and import it back.
+- **Backup & restore** — export all your data (conversations, texts,
+  projects, sources, settings) to a single JSON file and import it back.
+  Backups preserve the extracted text of uploaded sources, not the original
+  files. API keys are excluded from backups.
 - **Auto-updates** — the app checks for new releases on GitHub and offers to
   download and install them.
 
@@ -37,10 +39,10 @@ The chat assistant works with any of these providers (OpenAI-compatible):
 | **Custom** | Any OpenAI-compatible endpoint (LM Studio, Ollama, ...). |
 
 Your API key is stored in your **operating system's keychain** (Windows
-Credential Manager / macOS Keychain / libsecret) and is never written to disk
-when the keychain is available. If no keychain is available, the key falls
-back to the config file. Keys are never sent anywhere except to the provider
-you configure.
+Credential Manager / macOS Keychain). A fallback copy is also kept in
+`config.json` so the configuration survives a keychain failure. Backup
+exports never contain the API key. Keys are only sent to the provider you
+configure.
 
 ## Data & storage
 
@@ -48,8 +50,8 @@ All data lives in your system's app-data directory as plain JSON files:
 
 - `threads.json` — conversation thread registry (titles, timestamps)
 - `chat_<threadId>.json` — one file per conversation
-- `config.json` — provider, base URL, model, prompt settings (no API key
-  when the keychain works)
+- `config.json` — provider, base URL, model, prompt settings (plus a
+  fallback copy of the API key; the keychain copy is preferred when loading)
 - `settings.json` — theme and accent
 - `zen-prices.json` — cached model prices from the Zen docs
 

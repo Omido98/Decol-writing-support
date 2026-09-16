@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { Mock } from "vitest";
 
 const storage: Record<string, string> = {};
 
@@ -20,142 +19,93 @@ vi.stubGlobal("localStorage", {
   },
 });
 
-vi.mock("@tauri-apps/plugin-fs", () => ({
-  readTextFile: vi.fn(),
-  writeTextFile: vi.fn(),
-  remove: vi.fn(),
-  BaseDirectory: { AppData: 22 },
-}));
+vi.mock("@/utils/repository", async () => {
+  const { fakeRepository } = await import("../../test/fakeRepository");
+  return { repo: fakeRepository };
+});
 
-import {
-  writeTextFile,
-  readTextFile,
-  remove,
-} from "@tauri-apps/plugin-fs";
 import { useProjectStore, flushProjectSave } from "@/stores/projectStore";
 import { useLibraryStore } from "@/stores/libraryStore";
-
-const writeMock = writeTextFile as Mock;
-const readMock = readTextFile as Mock;
-const removeMock = remove as Mock;
-
-/** Simulate the disk: readTextFile serves what writeTextFile stored. */
-function useFakeDisk() {
-  const files = new Map<string, string>();
-  writeMock.mockImplementation(
-    async (path: string, content: string) => void files.set(path, content),
-  );
-  readMock.mockImplementation(async (path: string) => {
-    const content = files.get(path);
-    if (content === undefined) throw new Error("not found");
-    return content;
-  });
-  removeMock.mockImplementation(
-    async (path: string) => void files.delete(path),
-  );
-  return files;
-}
+import { fakeRepoState, resetFakeRepository } from "../../test/fakeRepository";
 
 beforeEach(async () => {
   await flushProjectSave();
-  vi.clearAllMocks();
   for (const key of Object.keys(storage)) delete storage[key];
+  resetFakeRepository();
   useProjectStore.setState({ projects: [], projectsLoaded: false });
   useLibraryStore.setState({ texts: [], textsLoaded: false });
 });
 
 describe("projectStore", () => {
   it("creates a project with a trimmed title and defaults", async () => {
-    useFakeDisk();
     const id = await useProjectStore.getState().createProject({
-      title: "  Extractivism essays  ",
-      description: "  A series on extraction  ",
+      title: "  My Project  ",
+      description: "  About texts  ",
     });
 
     const projects = useProjectStore.getState().projects;
     expect(projects).toHaveLength(1);
     expect(projects[0].id).toBe(id);
-    expect(projects[0].title).toBe("Extractivism essays");
-    expect(projects[0].description).toBe("A series on extraction");
+    expect(projects[0].title).toBe("My Project");
+    expect(projects[0].description).toBe("About texts");
+    expect(fakeRepoState.projects.get(id)?.brief).toBeNull();
   });
 
-  it("saves brief content with meta and loads it back", async () => {
-    const files = useFakeDisk();
+  it("updates metadata and stores the brief", async () => {
     const id = await useProjectStore.getState().createProject({ title: "P" });
-
     await useProjectStore.getState().updateProject(id, {
-      briefContent: "Purpose: test the brief.",
+      defaultAudience: "students",
+      briefContent: "The brief body.",
     });
+
+    const entry = fakeRepoState.projects.get(id)!;
+    expect(entry.meta.defaultAudience).toBe("students");
+    expect(entry.brief).toBe("The brief body.");
+    expect(entry.meta.briefWordCount).toBe(3);
+  });
+
+  it("clears a default by passing null", async () => {
+    const id = await useProjectStore.getState().createProject({ title: "P" });
+    await useProjectStore
+      .getState()
+      .updateProject(id, { defaultAudience: "students" });
+    await useProjectStore.getState().updateProject(id, { defaultAudience: null });
 
     const meta = useProjectStore.getState().projects[0];
-    expect(meta.briefWordCount).toBe(4);
-
-    // The debounced save is pending: the cache serves the latest content.
-    expect(await useProjectStore.getState().loadBriefContent(id)).toBe(
-      "Purpose: test the brief.",
-    );
-    await flushProjectSave();
-    expect(JSON.parse(files.get(`project_${id}.json`) ?? "{}")).toEqual({
-      content: "Purpose: test the brief.",
-    });
+    expect(meta.defaultAudience).toBeUndefined();
   });
 
-  it("sets defaults and clears them with null", async () => {
-    useFakeDisk();
-    const id = await useProjectStore.getState().createProject({ title: "P" });
-
-    await useProjectStore.getState().updateProject(id, {
-      defaultAudience: "academics",
-      defaultTone: "academic",
-      defaultCitations: "apa",
-      defaultLanguage: "English",
+  it("loading first keeps existing projects on cold-start mutation", async () => {
+    const now = "2026-01-01T00:00:00.000Z";
+    fakeRepoState.projects.set("p1", {
+      meta: {
+        id: "p1",
+        title: "Existing",
+        createdAt: now,
+        updatedAt: now,
+      },
+      brief: null,
+      rev: 0,
     });
-    let meta = useProjectStore.getState().projects[0];
-    expect(meta.defaultAudience).toBe("academics");
-    expect(meta.defaultTone).toBe("academic");
-    expect(meta.defaultCitations).toBe("apa");
-    expect(meta.defaultLanguage).toBe("English");
 
-    await useProjectStore.getState().updateProject(id, {
-      defaultTone: null,
-      defaultLanguage: null,
-    });
-    meta = useProjectStore.getState().projects[0];
-    expect(meta.defaultAudience).toBe("academics");
-    expect(meta.defaultTone).toBeUndefined();
-    expect(meta.defaultLanguage).toBeUndefined();
+    await useProjectStore.getState().createProject({ title: "New" });
+
+    expect([...fakeRepoState.projects.keys()]).toContain("p1");
+    expect(useProjectStore.getState().projects).toHaveLength(2);
   });
 
-  it("deleting a project removes the brief file", async () => {
-    const files = useFakeDisk();
+  it("deleteProject removes the project and its brief", async () => {
     const id = await useProjectStore.getState().createProject({ title: "P" });
-    await useProjectStore.getState().updateProject(id, { briefContent: "x" });
-    await flushProjectSave();
-
+    await useProjectStore.getState().updateProject(id, { briefContent: "b" });
     await useProjectStore.getState().deleteProject(id);
 
     expect(useProjectStore.getState().projects).toHaveLength(0);
-    expect(files.has(`project_${id}.json`)).toBe(false);
+    expect(fakeRepoState.projects.has(id)).toBe(false);
   });
 
-  it("library texts can join and leave a project", async () => {
-    useFakeDisk();
-    const projectId = await useProjectStore.getState().createProject({
-      title: "P",
-    });
-    const textId = await useLibraryStore.getState().createText({
-      title: "T",
-      content: "body",
-      projectId,
-    });
-    expect(
-      useLibraryStore.getState().texts[0].projectId,
-    ).toBe(projectId);
-
-    // Leaving the project: back to standalone.
-    await useLibraryStore.getState().updateText(textId, { projectId: "" });
-    expect(
-      useLibraryStore.getState().texts[0].projectId,
-    ).toBeUndefined();
+  it("loads brief content on demand", async () => {
+    const id = await useProjectStore.getState().createProject({ title: "P" });
+    await useProjectStore.getState().updateProject(id, { briefContent: "abc" });
+    expect(await useProjectStore.getState().loadBriefContent(id)).toBe("abc");
   });
 });

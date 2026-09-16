@@ -1,6 +1,6 @@
 [package]
 name = "decol-writing-support"
-version = "0.0.4"
+version = "0.1.0"
 description = "Decol Writing Support - write essays, articles and academic texts with a decolonial and anti-colonial perspective, with an AI chat assistant"
 authors = ["Omido98"]
 edition = "2021"
@@ -29,7 +29,10 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "stream", "gzip"] }
 scraper = "0.27"
 ego-tree = "0.11"
-keyring = "3"
+# Native credential stores must be enabled explicitly; without a matching
+# feature the keyring crate silently uses its non-persisting mock store.
+keyring = { version = "3", features = ["windows-native", "apple-native"] }
 futures-util = "0.3"
 tokio-util = "0.7"
 tokio = { version = "1", features = ["macros"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }

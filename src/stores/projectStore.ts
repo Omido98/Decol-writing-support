@@ -1,66 +1,7 @@
 import { create } from "zustand";
 import type { ProjectMeta } from "@/types";
-import { saveJson, loadJson, deleteFile } from "@/utils/storage";
+import { repo } from "@/utils/repository";
 import { wordCount } from "@/utils/tokens";
-
-// ──────────────────────────────────────────────
-// File layout (inside the app data directory)
-// ──────────────────────────────────────────────
-// projects.json        -> ProjectMeta[]
-// project_<id>.json    -> { content: string }  (the brief)
-
-function briefFile(id: string): string {
-  return `project_${id}.json`;
-}
-
-// ──────────────────────────────────────────────
-// Debounced brief saves (per project id)
-// ──────────────────────────────────────────────
-
-const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const pendingBrief = new Map<string, string>();
-
-function scheduleBriefSave(id: string, content: string) {
-  pendingBrief.set(id, content);
-  const existing = saveTimers.get(id);
-  if (existing) clearTimeout(existing);
-  saveTimers.set(
-    id,
-    setTimeout(() => {
-      saveTimers.delete(id);
-      const value = pendingBrief.get(id);
-      pendingBrief.delete(id);
-      if (value !== undefined) void saveJson(briefFile(id), { content: value });
-    }, 400),
-  );
-}
-
-/** Flush any pending debounced brief saves (called on window close). */
-export async function flushProjectSave(): Promise<void> {
-  const ids = [...saveTimers.keys()];
-  for (const id of ids) {
-    const timer = saveTimers.get(id);
-    if (timer) clearTimeout(timer);
-    saveTimers.delete(id);
-    const content = pendingBrief.get(id);
-    pendingBrief.delete(id);
-    if (content !== undefined) {
-      await saveJson(briefFile(id), { content });
-    }
-  }
-}
-
-// ──────────────────────────────────────────────
-// In-memory brief cache
-// ──────────────────────────────────────────────
-
-const briefCache = new Map<string, string>();
-
-function briefDerivedMeta(content: string) {
-  return {
-    briefWordCount: wordCount(content),
-  };
-}
 
 // ──────────────────────────────────────────────
 // Store interface
@@ -74,8 +15,18 @@ export interface ProjectState {
   /** Project whose brief the chat should develop (cross-tab handoff). */
   pendingBriefProjectId: string | null;
 
-  /** Load the project list from disk. */
+  /** Load the project list from the repository. */
   loadProjects: () => Promise<void>;
+
+  /**
+   * Make sure the project list has been loaded before any mutation runs.
+   * Mutating an uninitialized store overwrote the registry with an empty
+   * one (the same cold-start hazard as the library).
+   */
+  ensureLoaded: () => Promise<void>;
+
+  /** Reload everything from the repository after a backup restore. */
+  resetForRestore: () => Promise<void>;
 
   /** Create a project (optionally with initial title/description/defaults) and return its id. */
   createProject: (initial?: {
@@ -101,8 +52,8 @@ export interface ProjectState {
   ) => Promise<void>;
 
   /**
-   * Delete a project. The brief is removed; the caller is responsible for
-   * unlinking the project's texts first (they become standalone).
+   * Delete a project in one domain operation: the brief is removed and its
+   * texts/conversations are unlinked (they survive as standalone).
    */
   deleteProject: (id: string) => Promise<void>;
 
@@ -117,6 +68,31 @@ export interface ProjectState {
 }
 
 // ──────────────────────────────────────────────
+// In-memory brief cache
+// ──────────────────────────────────────────────
+
+const briefCache = new Map<string, string>();
+
+/** In-flight initialization, shared so concurrent mutations await one load. */
+let loadPromise: Promise<void> | null = null;
+
+function briefDerivedMeta(content: string) {
+  return {
+    briefWordCount: wordCount(content),
+  };
+}
+
+/**
+ * Flush pending debounced brief saves and wait until every repository
+ * operation has settled (called on window close).
+ */
+export async function flushProjectSave(): Promise<void> {
+  // Drain: fails visibly while earlier project writes are still retained.
+  await repo.drainProjectSaves();
+  await repo.idle();
+}
+
+// ──────────────────────────────────────────────
 // Store implementation
 // ──────────────────────────────────────────────
 
@@ -126,12 +102,32 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   pendingBriefProjectId: null,
 
   loadProjects: async () => {
-    const projects = (await loadJson<ProjectMeta[]>("projects.json")) ?? [];
+    const projects = await repo.projectsList();
     projects.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
     set({ projects, projectsLoaded: true });
   },
 
+  ensureLoaded: async () => {
+    if (get().projectsLoaded) return;
+    loadPromise ??= get()
+      .loadProjects()
+      .finally(() => {
+        loadPromise = null;
+      });
+    await loadPromise;
+  },
+
+  resetForRestore: async () => {
+    // The restore's maintenance barrier already reset the repository state
+    // centrally; only caches are dropped here.
+    briefCache.clear();
+    loadPromise = null;
+    set({ projects: [], projectsLoaded: false, pendingBriefProjectId: null });
+    await get().loadProjects();
+  },
+
   createProject: async (initial = {}) => {
+    await get().ensureLoaded();
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const meta: ProjectMeta = {
@@ -142,21 +138,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       createdAt: now,
       updatedAt: now,
     };
+    await repo.projectCreate(meta);
     set((s) => ({ projects: [meta, ...s.projects] }));
-    await saveJson("projects.json", get().projects);
     return id;
   },
 
   updateProject: async (id, patch) => {
-    const metaChanged =
-      patch.title !== undefined ||
-      patch.description !== undefined ||
-      patch.defaultAudience !== undefined ||
-      patch.defaultTone !== undefined ||
-      patch.defaultCitations !== undefined ||
-      patch.defaultLanguage !== undefined ||
-      patch.references !== undefined ||
-      patch.briefContent !== undefined;
+    await get().ensureLoaded();
+    const now = new Date().toISOString();
 
     set((s) => ({
       projects: s.projects.map((p) =>
@@ -193,34 +182,43 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
               ...(patch.briefContent !== undefined
                 ? briefDerivedMeta(patch.briefContent)
                 : {}),
-              updatedAt: new Date().toISOString(),
+              updatedAt: now,
             }
           : p,
       ),
     }));
 
-    if (metaChanged) {
-      await saveJson("projects.json", get().projects);
-    }
+    const meta = get().projects.find((p) => p.id === id);
+    if (!meta) return;
 
     if (patch.briefContent !== undefined) {
+      // One domain save: metadata and brief commit together (debounced).
       briefCache.set(id, patch.briefContent);
-      scheduleBriefSave(id, patch.briefContent);
+      repo.projectScheduleSave(id, {
+        meta,
+        brief: patch.briefContent,
+      });
+    } else {
+      // Metadata-only change, persisted immediately (acknowledged save).
+      await repo.projectSave(id, { meta }).catch(() => {
+        // Recorded in the repository's retryable failure registry.
+      });
     }
   },
 
   deleteProject: async (id) => {
-    set((s) => ({ projects: s.projects.filter((p) => p.id !== id) }));
-    await saveJson("projects.json", get().projects);
-    await deleteFile(briefFile(id));
+    await get().ensureLoaded();
+    // The repository cancels the project's pending debounced brief save,
+    // so it cannot recreate the file after deletion.
+    await repo.projectDelete(id);
     briefCache.delete(id);
+    set((s) => ({ projects: s.projects.filter((p) => p.id !== id) }));
   },
 
   loadBriefContent: async (id) => {
     const cached = briefCache.get(id);
     if (cached !== undefined) return cached;
-    const data = await loadJson<{ content: string }>(briefFile(id));
-    const content = data?.content ?? "";
+    const content = (await repo.projectBrief(id)) ?? "";
     briefCache.set(id, content);
     return content;
   },

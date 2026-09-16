@@ -267,9 +267,36 @@ export function getStandardPrompt(deepResearch = false): string {
  * project brief in markdown for them to refine and save.
  */
 export function buildProjectBriefPrompt(
-  options?: { references?: string | null },
+  options?: {
+    references?: string | null;
+    /** Library texts attached to the conversation — user content that
+     * belongs in the prompt in both thread modes. */
+    attachedTexts?: { title: string; textType: string; content: string }[];
+    /** Documents uploaded in the conversation. */
+    uploadedFiles?: { name: string; kind: string; content: string }[];
+  },
 ): string {
   const refs = options?.references?.trim();
+  // Attachment sections use the same builders as the standard prompt so the
+  // project mode can receive attached material too (it used to show the
+  // chips in the UI while silently dropping the content from the request).
+  const material: string[] = [];
+  const attached = options?.attachedTexts ?? [];
+  if (attached.length > 0) {
+    material.push(buildAttachedTextsSection(attached));
+  }
+  const uploaded = options?.uploadedFiles ?? [];
+  if (uploaded.length > 0) {
+    material.push(buildUploadedDocsSection(uploaded));
+  }
+  const refsSection = refs
+    ? buildReferencesSection([
+        {
+          source: "References of this project (provided before the chat started)",
+          content: refs,
+        },
+      ])
+    : "";
   return [
     ROLE_LINE,
     "",
@@ -287,9 +314,13 @@ export function buildProjectBriefPrompt(
     ...BEHAVIOR_RULES,
     "",
     ...ANTI_SLOP_RULES,
-  ].join("\n") + (refs ? "\n\n" + buildReferencesSection([
-    { source: "References of this project (provided before the chat started)", content: refs },
-  ]) : "");
+  ]
+    .join("\n")
+    .concat(
+      material.length > 0 || refsSection
+        ? "\n\n" + [...material, refsSection].filter(Boolean).join("\n\n")
+        : "",
+    );
 }
 
 /**

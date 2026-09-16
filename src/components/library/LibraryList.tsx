@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { exportTexts, importFiles } from "@/utils/libraryIo";
+import { markdownFromRich } from "@/utils/richMarkdown";
 import { textTypeLabel, type LibraryTextMeta } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,7 +38,13 @@ import {
 } from "lucide-react";
 
 type TypeFilter = "all" | (typeof TEXT_TYPE_IDS)[number];
-type FolderFilter = "all" | "none" | string;
+/**
+ * Folder filters: sentinel values ("all" / "none") are encoded SEPARATELY
+ * from concrete folders — a concrete folder always travels as
+ * `folder:<name>`, so a folder literally called "none" or "all" remains
+ * selectable and usable.
+ */
+type FolderFilter = "all" | "none" | `folder:${string}`;
 type ProjectFilter = "all" | "standalone" | string;
 type SortOrder = "recent" | "title" | "created";
 
@@ -138,8 +145,10 @@ export default function LibraryList({
         return false;
       }
       if (typeFilter !== "all" && t.textType !== typeFilter) return false;
-      if (folderFilter === "none" && t.folder) return false;
-      if (typeof folderFilter === "string" && folderFilter !== "all" && t.folder !== folderFilter) {
+      if (folderFilter === "none") {
+        // "No folder" matches texts without a folder.
+        if (t.folder) return false;
+      } else if (folderFilter !== "all" && t.folder !== folderFilter.slice("folder:".length)) {
         return false;
       }
       if (projectFilter === "standalone" && t.projectId) return false;
@@ -200,11 +209,13 @@ export default function LibraryList({
 
   const handleImport = async () => {
     setImporting(true);
-    await importFiles(
-      typeof folderFilter === "string" && folderFilter !== "all"
-        ? folderFilter
-        : undefined,
-    );
+    // Only a CONCRETE folder selection (encoded `folder:<name>`) pre-assigns
+    // imported texts; the sentinels ("all"/"none") never match a real
+    // folder name.
+    const folder = folderFilter.startsWith("folder:")
+      ? folderFilter.slice("folder:".length)
+      : undefined;
+    await importFiles(folder);
     setImporting(false);
   };
 
@@ -223,7 +234,11 @@ export default function LibraryList({
     for (const id of selected) {
       const meta = store.texts.find((t) => t.id === id);
       if (meta) {
-        items.push({ meta, content: await store.loadTextContent(id) });
+        // Exports go through the editor's own markdown serializer:
+        // markdown bodies pass through untouched, rich bodies keep their
+        // structure (headings, lists, tables, links).
+        const body = await store.loadTextContent(id);
+        items.push({ meta, content: markdownFromRich(body) });
       }
     }
     await exportTexts(items);
@@ -352,7 +367,7 @@ export default function LibraryList({
             <SelectItem value="all">All folders</SelectItem>
             <SelectItem value="none">No folder</SelectItem>
             {folders.map((folder) => (
-              <SelectItem key={folder} value={folder}>
+              <SelectItem key={folder} value={`folder:${folder}`}>
                 {folder}
               </SelectItem>
             ))}

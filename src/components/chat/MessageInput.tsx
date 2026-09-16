@@ -1,4 +1,4 @@
-import { useRef, useCallback, type ChangeEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useCallback, type ChangeEvent, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { BookMarked, FileText, FolderOpen, Loader2, Paperclip, Send, Square, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -69,6 +69,10 @@ export default function MessageInput({
   }, [value, disabled, onSend]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // IME composition (CJK input, diacritic toolbars): Enter confirms the
+    // composition, it must NEVER send the message prematurely. The
+    // compositionend event re-fires nothing; the next bare Enter sends.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -88,6 +92,13 @@ export default function MessageInput({
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 96) + "px";
   }, []);
+
+  // The draft can change PROGRAMMATICALLY (thread switch restores a saved
+  // draft, a send clears the input) without an onChange event — resize for
+  // the new value, and shrink back when it becomes empty.
+  useEffect(() => {
+    autoResize();
+  }, [value, autoResize]);
 
   const hasChips =
     projectTitle != null ||
@@ -259,7 +270,7 @@ export default function MessageInput({
               className={cn(
                 "text-[10px] leading-none select-none font-mono",
                 tokenEstimate > TOKEN_WARN_THRESHOLD
-                  ? "text-amber-500"
+                  ? "text-warning"
                   : "text-text-muted",
               )}
               title="Estimated input tokens for this request"
