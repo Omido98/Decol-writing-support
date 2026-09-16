@@ -1470,7 +1470,15 @@ function createSqliteRepository(): Repository {
     threadCreate: (meta) => {
       const key = entityKey("thread", meta.id);
       return enqueue(key, () =>
-        transport(() => invoke("db_thread_create", { meta: threadMetaToWire(meta, 0) })),
+        transport(() =>
+          invoke("db_thread_create", {
+            meta: threadMetaToWire(meta, 0),
+            // New conversations start empty; the Rust command requires the
+            // key whether or not there is data (non-Option Vec).
+            briefJson: null,
+            messages: [],
+          }),
+        ),
       ).then(() => {
         revs.set(key, 0);
       });

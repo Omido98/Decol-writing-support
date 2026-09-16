@@ -1326,6 +1326,25 @@ describe("repository (SQLite backend)", () => {
     });
   });
 
+  it("threadCreate produces the exact contract payload", async () => {
+    invokeMock.mockResolvedValue(null);
+    await repo.threadCreate({
+      id: fixtures.threadMeta.id,
+      title: fixtures.threadMeta.title,
+      mode: "text",
+      references: fixtures.threadMeta.references,
+      createdAt: fixtures.threadMeta.createdAt,
+      updatedAt: fixtures.threadMeta.updatedAt,
+    });
+    // The Rust command requires briefJson AND messages; a create must send
+    // both (an empty conversation is null + []).
+    expect(invokeMock).toHaveBeenCalledWith("db_thread_create", {
+      meta: fixtures.threadMeta,
+      briefJson: null,
+      messages: [],
+    });
+  });
+
   it("threadAppendMessage and threadReplaceMessage carry the incomplete marker (schema v12)", async () => {
     invokeMock.mockResolvedValue(null);
     await repo.threadAppendMessage(

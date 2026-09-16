@@ -206,6 +206,7 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   const messages = useChatStore((s) => s.messages);
   // The single conversation navigation action (route + owner load).
   const openDiscussion = useAppStore((s) => s.openDiscussion);
+  const setActionError = useAppStore((s) => s.setActionError);
 
   // ── Projects ──
   const projects = useProjectStore((s) => s.projects);
@@ -729,7 +730,15 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
             variant="ghost"
             size="icon-sm"
             onClick={() =>
-              void createThread().then((id) => openDiscussion(id))
+              void createThread()
+                .then((id) => openDiscussion(id))
+                .catch((err) =>
+                  setActionError(
+                    `Could not start a conversation: ${
+                      err instanceof Error ? err.message : String(err)
+                    }`,
+                  ),
+                )
             }
             title="New conversation"
             aria-label="New conversation"

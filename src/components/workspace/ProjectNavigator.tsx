@@ -124,6 +124,7 @@ export default function ProjectNavigator() {
   const createThread = useChatStore((s) => s.createThread);
   const setThreadState = useChatStore((s) => s.setThreadState);
   const setTextState = useLibraryStore((s) => s.setTextState);
+  const setActionError = useAppStore((s) => s.setActionError);
   const [archivedOpen, setArchivedOpen] = useState(false);
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -167,8 +168,16 @@ export default function ProjectNavigator() {
   };
 
   const handleNewDiscussion = async () => {
-    const id = await createThread();
-    openDiscussion(id);
+    try {
+      const id = await createThread();
+      openDiscussion(id);
+    } catch (err) {
+      setActionError(
+        `Could not start a conversation: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   };
 
   // Archived rows leave the main lists; they live in the Archived section.
