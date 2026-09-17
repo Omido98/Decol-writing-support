@@ -404,4 +404,54 @@ describe("conversation navigation (B02)", () => {
     // Zero re-parses: unchanged rows never re-render on a keystroke.
     expect(markdownState.renders).toBe(baseline);
   });
+
+  it("chat agent settings scroll, discard on Back, and persist on Save", async () => {
+    useAppStore.setState({ view: { kind: "discussion", id: "th-a" } });
+    render(<WorkspaceShell />);
+    expect(
+      (await screen.findAllByText("message-from-A")).length,
+    ).toBeGreaterThan(0);
+
+    const openSettings = () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: "Chat agent settings" }),
+      );
+    openSettings();
+
+    // The tall form (prompts + actions) sits inside a scroll container:
+    // the shell's main pane is overflow-hidden, so without this the
+    // custom prompt and Save are unreachable below the fold.
+    const readOnlyLabel = screen.getByText("Standard prompt (read-only)");
+    expect(readOnlyLabel.closest(".overflow-y-auto")).not.toBeNull();
+
+    // A draft edit then Back: the pane closes and nothing is written.
+    const before = useChatStore.getState().config.customSystemPrompt;
+    const customBox = () =>
+      screen.getByPlaceholderText(
+        /write your own instructions/i,
+      ) as HTMLTextAreaElement;
+    fireEvent.change(customBox(), { target: { value: "discarded draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByLabelText(/switch conversation/i)).toBeDefined();
+    await waitFor(() =>
+      expect(useChatStore.getState().config.customSystemPrompt).toBe(before),
+    );
+    expect(useChatStore.getState().config.customSystemPrompt).not.toBe(
+      "discarded draft",
+    );
+
+    // Reopening reads the saved config again — the draft never leaked.
+    openSettings();
+    expect(customBox().value).toBe(before);
+
+    // Save persists and closes.
+    fireEvent.change(customBox(), { target: { value: "kept prompt" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(useChatStore.getState().config.customSystemPrompt).toBe(
+        "kept prompt",
+      ),
+    );
+    expect(screen.getByLabelText(/switch conversation/i)).toBeDefined();
+  });
 });

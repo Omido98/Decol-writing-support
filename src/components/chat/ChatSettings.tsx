@@ -178,12 +178,23 @@ export default function ChatSettings({
         />
       </div>
 
-      <Button
-        onClick={handleSave}
-        className="w-full bg-primary hover:bg-primary/80 text-primary-foreground"
-      >
-        Save
-      </Button>
+      <div className="flex gap-2">
+        {/* Back discards: closing unmounts this form, and reopening reads
+            the saved config again — unsaved edits never leak. */}
+        <Button
+          variant="outline"
+          onClick={() => onDone?.()}
+          className="flex-1"
+        >
+          Back
+        </Button>
+        <Button
+          onClick={handleSave}
+          className="flex-1 bg-primary hover:bg-primary/80 text-primary-foreground"
+        >
+          Save
+        </Button>
+      </div>
     </div>
   );
 }
