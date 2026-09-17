@@ -1,11 +1,7 @@
 import { useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useProjectStore } from "@/stores/projectStore";
-import { useDraftStore, flushDrafts } from "@/stores/draftStore";
-import { useAppStore } from "@/stores/useAppStore";
-import { repo } from "@/utils/repository";
+import { wordCount } from "@/utils/tokens";
 import {
   AUDIENCES,
   CITATION_STYLES,
@@ -40,11 +36,9 @@ import {
 import {
   ArrowLeft,
   BookPlus,
-  BookOpenCheck,
-  Check,
   FolderInput,
+  Notebook,
   Pencil,
-  Save,
   Trash2,
 } from "lucide-react";
 
@@ -62,35 +56,25 @@ export default function ProjectDetail({
   onOpenText,
   onEditText,
   onNewText,
+  onOpenBrief,
 }: {
   id: string;
   onBack: () => void;
   onOpenText: (id: string) => void;
   onEditText: (id: string) => void;
   onNewText: (projectId: string) => void;
+  onOpenBrief: (projectId: string) => void;
 }) {
   const project = useProjectStore((s) => s.projects.find((p) => p.id === id) ?? null);
   const updateProject = useProjectStore((s) => s.updateProject);
   const deleteProject = useProjectStore((s) => s.deleteProject);
-  const requestBriefChat = useProjectStore((s) => s.requestBriefChat);
   const texts = useLibraryStore((s) => s.texts);
-  const setActiveTab = useAppStore((s) => s.setActiveTab);
 
+  // The overview only SUMMARISES the brief (word count); the full brief
+  // lives in its own view. Content is cached, so the count is cheap.
   const [briefContent, setBriefContent] = useState<string | null>(null);
-  const [editingBrief, setEditingBrief] = useState(false);
-  const [briefDraft, setBriefDraft] = useState("");
-  const [briefSaved, setBriefSaved] = useState(false);
-  const [briefSaving, setBriefSaving] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-
-  // Draft session: the brief draft lives OUT of component state, so
-  // switching projects/tabs keeps it and a restart recovers it.
-  const briefKey = `project-brief:${id}`;
-  const brief = useDraftStore((s) => s.drafts[briefKey] ?? null);
-  const setDraft = useDraftStore((s) => s.setDraft);
-  const markError = useDraftStore((s) => s.markError);
-  const clearDraft = useDraftStore((s) => s.clearDraft);
 
   // Edit dialog fields
   const [title, setTitle] = useState("");
@@ -107,11 +91,7 @@ export default function ProjectDetail({
     .filter((t) => t.projectId === id)
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 
-  // Load the brief once per project; drafts hydrate at startup.
-  useEffect(() => {
-    void useDraftStore.getState().hydrate();
-  }, []);
-
+  // Load the brief once per project (cached) for the summary row.
   useEffect(() => {
     let cancelled = false;
     setBriefContent(null);
@@ -160,56 +140,6 @@ export default function ProjectDetail({
       references: references.trim(),
     });
     setEditOpen(false);
-  };
-
-  const startEditingBrief = () => {
-    // The recovered draft (typed in an earlier session or before unmount)
-    // wins over the stored brief.
-    setBriefDraft(brief?.content ?? briefContent ?? "");
-    setEditingBrief(true);
-  };
-
-  const handleSaveBrief = async () => {
-    // Capture the submitted revision: typing while the save is in flight
-    // must stay dirty, and only the acknowledged revision is cleared.
-    const submitted = briefDraft;
-    setBriefSaving(true);
-    try {
-      await updateProject(id, { briefContent: submitted });
-      // Acknowledged save: flush the debounced brief saves to disk before
-      // reporting "Saved".
-      await repo.flushProjectSaves();
-      await repo.idle();
-      const current = useDraftStore.getState().drafts[briefKey];
-      const superseded = current != null && current.content !== submitted;
-      if (!superseded) {
-        clearDraft(briefKey);
-        setEditingBrief(false);
-      }
-      await flushDrafts();
-      setBriefContent(submitted);
-      setBriefSaved(true);
-      setTimeout(() => setBriefSaved(false), 1500);
-    } catch (err) {
-      // Keep newer typing untouched; record the failed revision exactly
-      // when nothing newer was typed meanwhile.
-      const current = useDraftStore.getState().drafts[briefKey];
-      const unchanged = current == null || current.content === submitted;
-      markError(
-        briefKey,
-        `Save failed: ${err instanceof Error ? err.message : String(err)}`,
-        unchanged ? { content: submitted } : undefined,
-      );
-      await flushDrafts();
-    } finally {
-      setBriefSaving(false);
-    }
-  };
-
-  const discardBriefDraft = () => {
-    clearDraft(briefKey);
-    setBriefDraft(briefContent ?? "");
-    setEditingBrief(false);
   };
 
   const handleDeleteProject = async () => {
@@ -278,99 +208,37 @@ export default function ProjectDetail({
             </p>
           )}
 
-          {/* Project brief */}
+          {/* Project brief — collapsed to a summary row. The full brief,
+              its editor, and the brief chat live in the brief view. */}
           <section className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold text-text-primary">
-                Project brief
-              </h2>
-              <div className="flex items-center gap-1">
-                {editingBrief ? (
-                  <>
-                    <Button variant="outline" size="sm" onClick={() => setEditingBrief(false)}>
-                      Cancel
-                    </Button>
-                    <Button
-                      size="sm"
-                      className="bg-primary hover:bg-primary/80 text-primary-foreground"
-                      onClick={() => void handleSaveBrief()}
-                    >
-                      {briefSaved ? (
-                        <Check className="size-4 mr-1" />
-                      ) : (
-                        <Save className="size-4 mr-1" />
-                      )}
-                      {briefSaving ? "Saving…" : briefSaved ? "Saved" : "Save brief"}
-                    </Button>
-                    {editingBrief && (
-                      <Button variant="ghost" size="sm" onClick={discardBriefDraft}>
-                        Discard
-                      </Button>
-                    )}
-                  </>
-                ) : (
-                  <Button variant="outline" size="sm" onClick={startEditingBrief}>
-                    <Pencil className="size-4 mr-1" />
-                    {briefContent?.trim() ? "Edit brief" : "Write brief"}
-                  </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    requestBriefChat(id);
-                    setActiveTab("chat");
-                  }}
-                  title="Starts a project-brief conversation in the chat"
-                >
-                  <BookOpenCheck className="size-4 mr-1 text-text-secondary" />
-                  Ask the chat
-                </Button>
-              </div>
+            <h2 className="text-sm font-semibold text-text-primary">
+              Project brief
+            </h2>
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => onOpenBrief(id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onOpenBrief(id);
+                }
+              }}
+              className="flex items-center gap-3 rounded-lg border border-border bg-surface px-4 py-3 cursor-pointer hover:border-primary/40 transition-colors text-left"
+              title="Open the project brief"
+            >
+              <Notebook className="size-3.5 shrink-0 text-text-secondary" />
+              <span className="min-w-0 flex-1 font-medium text-text-primary truncate">
+                Brief
+              </span>
+              <span className="shrink-0 text-[11px] text-text-muted select-none">
+                {briefContent == null
+                  ? "Loading…"
+                  : briefContent.trim()
+                    ? `${wordCount(briefContent)} words`
+                    : "No brief yet"}
+              </span>
             </div>
-            {editingBrief ? (
-              <>
-                {brief?.error && (
-                  <div
-                    role="alert"
-                    className="mb-2 flex items-center gap-3 rounded-lg border border-border bg-surface-alt px-3 py-2 text-xs text-text-secondary"
-                  >
-                    <span className="flex-1">{brief.error} Your text is kept; retry or discard explicitly.</span>
-                    <Button size="sm" variant="outline" onClick={() => void handleSaveBrief()}>
-                      Retry
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={discardBriefDraft}>
-                      Discard draft
-                    </Button>
-                  </div>
-                )}
-                <Textarea
-                  value={briefDraft}
-                  onChange={(e) => {
-                    setBriefDraft(e.target.value);
-                    setDraft(briefKey, "project-brief", id, { content: e.target.value });
-                  }}
-                  placeholder="Purpose, audience, planned texts, structure, topics, voice, citations, must include, must avoid…"
-                  className="bg-field min-h-[280px] resize-y [font-family:var(--font-doc)]"
-                />
-              </>
-            ) : briefContent == null ? (
-              <p className="text-text-muted text-sm">Loading…</p>
-            ) : briefContent.trim() ? (
-              <div className="rounded-lg border border-border bg-surface px-5 py-4">
-                <div className="doc-markdown prose prose-sm max-w-none dark:prose-invert">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {briefContent}
-                  </ReactMarkdown>
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm text-text-muted italic">
-                No project brief yet. Write it here, or develop one with the
-                chat agent in Project mode — the agent interviews you and
-                drafts the brief, then you save it to this project.
-              </p>
-            )}
           </section>
 
           {/* Texts of the project */}
