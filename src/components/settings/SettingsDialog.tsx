@@ -18,6 +18,7 @@ import { invalidateAllOperations } from "@/services/aiOperations";
 import { useLibraryStore, flushLibrarySave } from "@/stores/libraryStore";
 import { useProjectStore, flushProjectSave } from "@/stores/projectStore";
 import { useSourceStore } from "@/stores/sourceStore";
+import { useFolderStore } from "@/stores/folderStore";
 import { flushDrafts, resetDraftsForRestore } from "@/stores/draftStore";
 import { capturePendingEditorChanges } from "@/components/editor/useDocumentSession";
 import { useAppStore } from "@/stores/useAppStore";
@@ -155,6 +156,7 @@ export default function SettingsDialog({
       await useLibraryStore.getState().resetForRestore();
       await useProjectStore.getState().resetForRestore();
       await useSourceStore.getState().resetForRestore();
+      await useFolderStore.getState().resetForRestore();
       await useSettingsStore.getState().loadSettings();
       // Recovery drafts and the shell layout describe the replaced
       // dataset too: reset them, then re-hydrate the restored state.

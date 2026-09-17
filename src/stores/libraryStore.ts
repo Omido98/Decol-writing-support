@@ -214,7 +214,13 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
               ...(patch.textType !== undefined
                 ? { textType: patch.textType }
                 : {}),
-              ...(patch.folder !== undefined ? { folder: patch.folder } : {}),
+              // The folder name is trimmed; an empty string means "no
+              // folder" (the key is dropped rather than stored empty).
+              ...(patch.folder !== undefined
+                ? patch.folder.trim()
+                  ? { folder: patch.folder.trim() }
+                  : { folder: undefined }
+                : {}),
               ...(patch.projectId !== undefined
                 ? patch.projectId
                   ? { projectId: patch.projectId }

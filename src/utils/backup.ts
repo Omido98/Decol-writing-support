@@ -200,6 +200,16 @@ export interface DumpThreadBriefRow {
   briefJson: string | null;
 }
 
+/** A navigator folder registry row (schema v16). */
+export interface DumpFolderRow {
+  id: string;
+  /** "" = the standalone area; otherwise a project id. */
+  scope: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Canonical message row: `StoredMessageRow` with its message flattened. */
 export interface DumpMessageRow {
   threadId: string;
@@ -226,6 +236,7 @@ export interface CanonicalDump {
   threads: DumpThreadRow[];
   threadBriefs: DumpThreadBriefRow[];
   messages: DumpMessageRow[];
+  folders: DumpFolderRow[];
 }
 
 export interface BackupBundle {
@@ -710,12 +721,23 @@ function buildCanonicalDump(raw: unknown): CanonicalDump {
     };
   });
   const messages = arrayOf(dump.messages, "messages").map(normMessage);
+  const folders = arrayOf(dump.folders, "folders").map((r, i) => {
+    const row = recordOf(r, `folders[${i}]`);
+    return {
+      id: nonEmptyStr(row.id, `folders[${i}].id`),
+      scope: str(row.scope, `folders[${i}].scope`),
+      name: nonEmptyStr(row.name, `folders[${i}].name`),
+      createdAt: str(row.createdAt, `folders[${i}].createdAt`),
+      updatedAt: str(row.updatedAt, `folders[${i}].updatedAt`),
+    };
+  });
 
   const textIds = uniqueIds(texts, "texts");
   const projectIds = uniqueIds(projects, "projects");
   const threadIds = uniqueIds(threads, "threads");
   uniqueIds(proposals, "proposals");
   uniqueIds(sourcePassages, "sourcePassages");
+  uniqueIds(folders, "folders");
 
   const sourceIds = new Set<string>();
   const sourceHashes = new Set<string>();
@@ -801,6 +823,21 @@ function buildCanonicalDump(raw: unknown): CanonicalDump {
   for (const row of sources) {
     requireParent(row.projectId, projectIds, `sources "${row.id}"`);
   }
+  const folderKeys = new Set<string>();
+  for (const row of folders) {
+    // A project-scoped folder must point at a project in the same dump.
+    if (row.scope !== "") {
+      requireParent(row.scope, projectIds, `folders "${row.id}"`);
+    }
+    const key = `${row.scope}\u0000${row.name}`;
+    if (folderKeys.has(key)) {
+      bad(
+        `folders contains duplicate row for scope "${row.scope}" ` +
+          `named "${row.name}"`,
+      );
+    }
+    folderKeys.add(key);
+  }
 
   return {
     texts,
@@ -814,6 +851,7 @@ function buildCanonicalDump(raw: unknown): CanonicalDump {
     threads,
     threadBriefs,
     messages,
+    folders,
   };
 }
 

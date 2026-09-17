@@ -71,5 +71,19 @@
     "pinned": false,
     "createdAt": "2026-01-01T00:00:00.000Z",
     "updatedAt": "2026-01-02T00:00:00.000Z"
+  },
+  "folderMeta": {
+    "id": "fold-1",
+    "scope": "",
+    "name": "Essays",
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-02T00:00:00.000Z"
+  },
+  "folderMetaProject": {
+    "id": "fold-2",
+    "scope": "p-1",
+    "name": "Drafts",
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-02T00:00:00.000Z"
   }
 }

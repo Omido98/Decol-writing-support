@@ -1,6 +1,22 @@
 {
   "bundle": {
     "data": {
+      "folders": [
+        {
+          "createdAt": "2026-01-07T00:00:00.000Z",
+          "id": "fold-1",
+          "name": "Essays",
+          "scope": "",
+          "updatedAt": "2026-01-07T00:00:00.000Z"
+        },
+        {
+          "createdAt": "2026-01-08T00:00:00.000Z",
+          "id": "fold-2",
+          "name": "Drafts",
+          "scope": "p-1",
+          "updatedAt": "2026-01-08T00:00:00.000Z"
+        }
+      ],
       "messages": [
         {
           "attachmentsJson": "[{\"name\":\"fieldnotes.txt\",\"kind\":\"text\",\"content\":\"Observed in the archive.\",\"wordCount\":120}]",

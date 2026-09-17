@@ -1346,6 +1346,33 @@ describe("repository (SQLite backend)", () => {
     });
   });
 
+  it("folder commands produce the exact contract payloads", async () => {
+    invokeMock.mockResolvedValue(null);
+    await repo.folderCreate(fixtures.folderMeta);
+    expect(invokeMock).toHaveBeenCalledWith("db_folder_create", {
+      folder: fixtures.folderMeta,
+    });
+
+    invokeMock.mockResolvedValue([
+      { kind: "text", id: "t-1", rev: 4 },
+      { kind: "thread", id: "th-1", rev: 5 },
+    ]);
+    await repo.folderRename("", "Notes", "Archive", "u2");
+    expect(invokeMock).toHaveBeenCalledWith("db_folder_rename", {
+      scope: "",
+      oldName: "Notes",
+      newName: "Archive",
+      updatedAt: "u2",
+    });
+
+    invokeMock.mockResolvedValue([{ kind: "text", id: "t-1", rev: 6 }]);
+    await repo.folderDelete("", "Archive");
+    expect(invokeMock).toHaveBeenCalledWith("db_folder_delete", {
+      scope: "",
+      name: "Archive",
+    });
+  });
+
   it("threadAppendMessage and threadReplaceMessage carry the incomplete marker (schema v12)", async () => {
     invokeMock.mockResolvedValue(null);
     await repo.threadAppendMessage(

@@ -47,8 +47,10 @@ import { useAppStore } from "@/stores/useAppStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useChatStore } from "@/stores/chatStore";
+import { useFolderStore } from "@/stores/folderStore";
 import { fakeRepoState, resetFakeRepository } from "@/test/fakeRepository";
-import type { ThreadMeta } from "@/types";
+import { markdownDocument } from "@/utils/documentCodec";
+import type { FolderMeta, LibraryTextMeta, ThreadMeta } from "@/types";
 
 function seedThread(meta: ThreadMeta) {
   fakeRepoState.threads.set(meta.id, {
@@ -57,6 +59,19 @@ function seedThread(meta: ThreadMeta) {
     messages: [],
     rev: 0,
   });
+}
+
+function seedText(meta: LibraryTextMeta) {
+  fakeRepoState.texts.set(meta.id, {
+    meta,
+    body: markdownDocument("body"),
+    versions: [],
+    rev: 0,
+  });
+}
+
+function seedFolder(folder: FolderMeta) {
+  fakeRepoState.folders.set(folder.id, folder);
 }
 
 beforeEach(() => {
@@ -74,12 +89,13 @@ beforeEach(() => {
     threadLoaded: true,
     messages: [],
   });
+  useFolderStore.setState({ folders: [], foldersLoaded: false });
   useAppStore.setState({ view: { kind: "list" }, actionError: null });
 });
 
 afterEach(() => cleanup());
 
-describe("ProjectNavigator conversation folders", () => {
+describe("ProjectNavigator folders", () => {
   it("groups conversations by folder and moves one through the dialog", async () => {
     const loose: ThreadMeta = {
       id: "c-a",
@@ -120,7 +136,7 @@ describe("ProjectNavigator conversation folders", () => {
         name: /Move conversation Loose notes to a folder/i,
       }),
     );
-    fireEvent.change(screen.getByLabelText("Conversation folder"), {
+    fireEvent.change(screen.getByLabelText("Folder name"), {
       target: { value: "Drafts" },
     });
     fireEvent.click(screen.getByRole("button", { name: /^Move$/ }));
@@ -128,7 +144,153 @@ describe("ProjectNavigator conversation folders", () => {
     await waitFor(() =>
       expect(fakeRepoState.threads.get("c-a")?.meta.folder).toBe("Drafts"),
     );
-    await waitFor(() => expect(screen.getByText("Loose notes")).toBeDefined());
+  });
+
+  it("groups texts and chats together in one folder", () => {
+    seedText({
+      id: "t-1",
+      title: "Draft chapter",
+      textType: "essay",
+      folder: "Research",
+      createdAt: "t",
+      updatedAt: "t",
+    });
+    seedThread({
+      id: "c-1",
+      title: "Chat about chapter",
+      mode: "text",
+      folder: "Research",
+      createdAt: "t",
+      updatedAt: "t",
+    });
+    useLibraryStore.setState({
+      texts: [...fakeRepoState.texts.values()].map((e) => e.meta),
+      textsLoaded: true,
+      pendingAttachId: null,
+    });
+    useChatStore.setState({
+      threads: [...fakeRepoState.threads.values()].map((e) => e.meta),
+    });
+
+    render(<ProjectNavigator />);
+
+    // Both rows live under the same folder (shown once, mixed).
+    expect(screen.getByText("Draft chapter")).toBeDefined();
+    expect(screen.getByText("Chat about chapter")).toBeDefined();
+    expect(screen.getByRole("button", { name: /Rename folder Research/i })).toBeDefined();
+  });
+
+  it("creates a folder, drags a text in, renames it, and deletes it (contents move out)", async () => {
+    const draft: LibraryTextMeta = {
+      id: "t-1",
+      title: "Loose draft",
+      textType: "essay",
+      createdAt: "t",
+      updatedAt: "t",
+    };
+    seedText(draft);
+    useLibraryStore.setState({
+      texts: [draft],
+      textsLoaded: true,
+      pendingAttachId: null,
+    });
+
+    render(<ProjectNavigator />);
+
+    // Create the folder through the real dialog.
+    fireEvent.click(screen.getByRole("button", { name: /^New folder$/i }));
+    fireEvent.change(screen.getByLabelText("Folder name"), {
+      target: { value: "Essays" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Create$/ }));
+    await waitFor(() =>
+      expect(
+        [...fakeRepoState.folders.values()].some(
+          (f) => f.scope === "" && f.name === "Essays",
+        ),
+      ).toBe(true),
+    );
+
+    // Drag the document row onto the folder row (state-based DnD; jsdom
+    // has no DataTransfer implementation).
+    const row = screen.getByText("Loose draft").closest("[draggable]")!;
+    const folderRow = screen.getByRole("button", {
+      name: /Rename folder Essays/i,
+    }).parentElement!;
+    fireEvent.dragStart(row);
+    fireEvent.dragOver(folderRow);
+    fireEvent.drop(folderRow);
+    await waitFor(() =>
+      expect(fakeRepoState.texts.get("t-1")?.meta.folder).toBe("Essays"),
+    );
+
+    // Rename the folder: the registry and the item both move.
+    fireEvent.click(
+      screen.getByRole("button", { name: /Rename folder Essays/i }),
+    );
+    fireEvent.change(screen.getByLabelText("Folder name"), {
+      target: { value: "Archive" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Rename$/ }));
+    await waitFor(() =>
+      expect(fakeRepoState.texts.get("t-1")?.meta.folder).toBe("Archive"),
+    );
+    expect(
+      [...fakeRepoState.folders.values()].some(
+        (f) => f.scope === "" && f.name === "Archive",
+      ),
+    ).toBe(true);
+
+    // Delete the folder: the document moves out, nothing is deleted.
+    fireEvent.click(
+      screen.getByRole("button", { name: /Delete folder Archive/i }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Delete folder$/ }));
+    await waitFor(() =>
+      expect(fakeRepoState.texts.get("t-1")?.meta.folder).toBeUndefined(),
+    );
+    expect(fakeRepoState.texts.has("t-1")).toBe(true);
+    expect(fakeRepoState.folders.size).toBe(0);
+  });
+
+  it("removes an item from its folder with the no-folder drop zone", async () => {
+    const filed: LibraryTextMeta = {
+      id: "t-2",
+      title: "Filed draft",
+      textType: "essay",
+      folder: "Essays",
+      createdAt: "t",
+      updatedAt: "t",
+    };
+    seedText(filed);
+    seedFolder({
+      id: "fold-1",
+      scope: "",
+      name: "Essays",
+      createdAt: "t",
+      updatedAt: "t",
+    });
+    useLibraryStore.setState({
+      texts: [filed],
+      textsLoaded: true,
+      pendingAttachId: null,
+    });
+    useFolderStore.setState({
+      folders: [...fakeRepoState.folders.values()],
+      foldersLoaded: true,
+    });
+
+    render(<ProjectNavigator />);
+
+    const row = screen.getByText("Filed draft").closest("[draggable]")!;
+    fireEvent.dragStart(row);
+    // The strip only exists while dragging an item that has a folder.
+    const strip = screen.getByText(/Drop here to remove from “Essays”/i);
+    fireEvent.dragOver(strip);
+    fireEvent.drop(strip);
+    await waitFor(() =>
+      expect(fakeRepoState.texts.get("t-2")?.meta.folder).toBeUndefined(),
+    );
   });
 
   it("renames a project-linked conversation from the navigator", async () => {
