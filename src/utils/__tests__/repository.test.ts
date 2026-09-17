@@ -1311,6 +1311,7 @@ describe("repository (SQLite backend)", () => {
         title: fixtures.threadMetaProject.title,
         mode: "project",
         projectId: fixtures.threadMetaProject.projectId,
+        folder: fixtures.threadMetaProject.folder,
         createdAt: fixtures.threadMetaProject.createdAt,
         updatedAt: fixtures.threadMetaProject.updatedAt,
       },

@@ -2,7 +2,7 @@
 // LLM provider registry
 // ──────────────────────────────────────────────
 
-export type ProviderId = "zen" | "anthropic" | "openai" | "custom";
+export type ProviderId = "zen" | "anthropic" | "openai" | "deepseek" | "custom";
 
 export interface ProviderDef {
   id: ProviderId;
@@ -48,6 +48,18 @@ export const PROVIDERS: ProviderDef[] = [
     auth: "bearer",
   },
   {
+    id: "deepseek",
+    label: "DeepSeek",
+    // DeepSeek keys use the generic `sk-` prefix (ambiguous with OpenAI
+    // and Zen keys), so DeepSeek is never auto-detected from a pasted key.
+    keyPrefixes: [],
+    // The OpenAI-compatible base URL: `{base}/models` and
+    // `{base}/chat/completions` are what the backend builds.
+    defaultBaseUrl: "https://api.deepseek.com",
+    defaultModel: "deepseek-flash",
+    auth: "bearer",
+  },
+  {
     id: "custom",
     label: "Custom (OpenAI-compatible)",
     keyPrefixes: [],
@@ -84,6 +96,7 @@ export function inferProviderFromBaseUrl(baseUrl?: string): ProviderId {
   if (url.includes("opencode.ai/zen")) return "zen";
   if (url.includes("api.anthropic.com")) return "anthropic";
   if (url.includes("api.openai.com")) return "openai";
+  if (url.includes("api.deepseek.com")) return "deepseek";
   return "custom";
 }
 

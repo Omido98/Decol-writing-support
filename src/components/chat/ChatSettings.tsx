@@ -3,7 +3,6 @@ import { useChatStore } from "@/stores/chatStore";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -26,12 +25,6 @@ export default function ChatSettings({
   const config = useChatStore((s) => s.config);
   const setConfig = useChatStore((s) => s.setConfig);
 
-  const [webSearchEnabled, setWebSearchEnabled] = useState(
-    config.webSearchEnabled ?? true,
-  );
-  const [deepResearchEnabled, setDeepResearchEnabled] = useState(
-    config.deepResearchEnabled ?? false,
-  );
   const [promptMode, setPromptMode] = useState(
     config.systemPromptMode ?? "standard",
   );
@@ -42,16 +35,12 @@ export default function ChatSettings({
   const standardPrompt = useMemo(() => getStandardPrompt(), []);
 
   useEffect(() => {
-    setWebSearchEnabled(config.webSearchEnabled ?? true);
-    setDeepResearchEnabled(config.deepResearchEnabled ?? false);
     setPromptMode(config.systemPromptMode ?? "standard");
     setCustomPrompt(config.customSystemPrompt ?? "");
-  }, [config.webSearchEnabled, config.deepResearchEnabled, config.systemPromptMode, config.customSystemPrompt]);
+  }, [config.systemPromptMode, config.customSystemPrompt]);
 
   const handleSave = async () => {
     await setConfig({
-      webSearchEnabled,
-      deepResearchEnabled,
       systemPromptMode: promptMode,
       customSystemPrompt: customPrompt,
     });
@@ -72,65 +61,10 @@ export default function ChatSettings({
           . The options below only apply to the chat agent.
         </p>
       )}
-      {/* Web Search */}
-      <div className="space-y-1.5">
-        <div className="flex items-start gap-2">
-          <Checkbox
-            id="web-search-enabled"
-            checked={webSearchEnabled}
-            onCheckedChange={(checked) =>
-              setWebSearchEnabled(checked === true)
-            }
-            className="mt-0.5"
-          />
-          <div className="space-y-1">
-            <Label
-              htmlFor="web-search-enabled"
-              className="text-text-secondary text-xs cursor-pointer"
-            >
-              Web search
-            </Label>
-            <p className="text-xs text-text-muted">
-              Let the agent search the web and fetch pages to check facts
-              while you work (one search and up to 5 pages per turn). Turn
-              it off if your model keeps requesting web tools without
-              answering.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Deep Research */}
-      <div className="space-y-1.5">
-        <div className="flex items-start gap-2">
-          <Checkbox
-            id="deep-research-enabled"
-            checked={deepResearchEnabled}
-            onCheckedChange={(checked) => {
-              const on = checked === true;
-              setDeepResearchEnabled(on);
-              // Deep research needs the web tools to do anything.
-              if (on) setWebSearchEnabled(true);
-            }}
-            className="mt-0.5"
-          />
-          <div className="space-y-1">
-            <Label
-              htmlFor="deep-research-enabled"
-              className="text-text-secondary text-xs cursor-pointer"
-            >
-              Deep research
-            </Label>
-            <p className="text-xs text-text-muted">
-              Let the agent research thoroughly: multiple searches with
-              varied queries and many page fetches until the key claims are
-              verified. Slower and uses more tokens. Has no effect with a
-              custom prompt, which replaces these instructions entirely.
-            </p>
-          </div>
-        </div>
-      </div>
-
+      <p className="text-xs text-text-muted">
+        Web search and deep research are toggled in the conversation itself —
+        the pills above the message box apply to the next sends.
+      </p>
       {/* Chat Agent Prompt */}
       <div className="space-y-1.5">
         <Label className="text-text-secondary text-xs">

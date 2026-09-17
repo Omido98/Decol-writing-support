@@ -164,6 +164,10 @@ pub struct ThreadRow {
     pub mode: String,
     #[serde(default)]
     pub project_id: Option<String>,
+    /// One-level folder name for organizing conversations (v15); legacy
+    /// rows/dumps default to none.
+    #[serde(default)]
+    pub folder: Option<String>,
     /// Wire name `references`; the legacy `refs` spelling stays readable.
     #[serde(rename = "references", alias = "refs", default)]
     pub refs: Option<String>,
@@ -552,8 +556,12 @@ CREATE TABLE IF NOT EXISTS messages (
 
 /// Schema the current build supports. Databases created by a NEWER version
 /// are refused rather than misread.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 14;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 15;
 
+/// v15: conversation folders. A thread carries an optional one-level
+/// folder name for organizing the navigator (texts already have one).
+/// Applied by `migrate_v15` (column-guarded).
+///
 /// v13: bibliography metadata on sources (B18): type, container, publisher,
 /// volume/issue/pages, and abstract, each nullable so legacy rows and older
 /// dumps default to absent. Applied by `migrate_v13` (column-guarded).
@@ -927,6 +935,16 @@ fn migrate_v12(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// v15, REPAIRABLE: the conversation folder column is added only when
+/// missing (legacy rows default to no folder).
+fn migrate_v15(conn: &Connection) -> Result<(), String> {
+    if !column_exists(conn, "threads", "folder")? {
+        conn.execute_batch("ALTER TABLE threads ADD COLUMN folder TEXT;")
+            .map_err(|e| format!("Failed to add conversation folders: {e}"))?;
+    }
+    Ok(())
+}
+
 /// v13, REPAIRABLE: every bibliography metadata column is added only when
 /// missing, so a crash mid-migration leaves a re-runnable database.
 fn migrate_v13(conn: &Connection) -> Result<(), String> {
@@ -986,6 +1004,7 @@ fn ensure_schema(conn: &Connection) -> Result<(), String> {
     apply_migration(conn, 12, migrate_v12)?;
     apply_migration(conn, 13, migrate_v13)?;
     apply_migration(conn, 14, migrate_v14)?;
+    apply_migration(conn, 15, migrate_v15)?;
     Ok(())
 }
 
@@ -1104,6 +1123,7 @@ fn row_to_thread(r: &rusqlite::Row) -> rusqlite::Result<ThreadRow> {
         title: r.get("title")?,
         mode: r.get("mode")?,
         project_id: r.get("project_id")?,
+        folder: r.get("folder")?,
         refs: r.get("refs")?,
         rev: r.get("rev")?,
         archived: r.get::<_, i64>("archived")? != 0,
@@ -2156,13 +2176,14 @@ fn threads_list(conn: &Connection) -> Result<Vec<ThreadRow>, String> {
 /// INSERT a thread row with its revision. Used by creation and imports.
 fn thread_insert(conn: &Connection, meta: &ThreadRow) -> Result<(), String> {
     conn.execute(
-        "INSERT INTO threads (id, title, mode, project_id, refs, rev, archived, pinned, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO threads (id, title, mode, project_id, folder, refs, rev, archived, pinned, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             meta.id,
             meta.title,
             meta.mode,
             meta.project_id,
+            meta.folder,
             meta.refs,
             meta.rev,
             meta.archived,
@@ -2184,12 +2205,13 @@ fn thread_insert(conn: &Connection, meta: &ThreadRow) -> Result<(), String> {
 /// Upsert a thread row preserving its given revision (import path only).
 fn thread_upsert(conn: &Connection, meta: &ThreadRow) -> Result<(), String> {
     conn.execute(
-        "INSERT INTO threads (id, title, mode, project_id, refs, rev, archived, pinned, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        "INSERT INTO threads (id, title, mode, project_id, folder, refs, rev, archived, pinned, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(id) DO UPDATE SET
            title = excluded.title,
            mode = excluded.mode,
            project_id = excluded.project_id,
+           folder = excluded.folder,
            refs = excluded.refs,
            rev = excluded.rev,
            archived = excluded.archived,
@@ -2201,6 +2223,7 @@ fn thread_upsert(conn: &Connection, meta: &ThreadRow) -> Result<(), String> {
             meta.title,
             meta.mode,
             meta.project_id,
+            meta.folder,
             meta.refs,
             meta.rev,
             meta.archived,
@@ -2338,10 +2361,19 @@ fn thread_save(
     let new_rev = current_rev + 1;
     let project_id = live_project_id(&tx, meta.project_id.as_deref())?;
     tx.execute(
-        "UPDATE threads SET title = ?2, mode = ?3, project_id = ?4, refs = ?5,
-                updated_at = ?6, rev = ?7
+        "UPDATE threads SET title = ?2, mode = ?3, project_id = ?4, folder = ?5, refs = ?6,
+                updated_at = ?7, rev = ?8
          WHERE id = ?1",
-        params![id, meta.title, meta.mode, project_id, meta.refs, meta.updated_at, new_rev],
+        params![
+            id,
+            meta.title,
+            meta.mode,
+            project_id,
+            meta.folder,
+            meta.refs,
+            meta.updated_at,
+            new_rev
+        ],
     )
     .map_err(|e| e.to_string())?;
     write_thread_data(&tx, id, brief_json, messages)?;
@@ -2449,6 +2481,31 @@ fn thread_delete(conn: &Connection, id: &str) -> Result<(), String> {
     conn.execute("DELETE FROM threads WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Move a thread to a folder (`None` clears it). Metadata-only: the
+/// messages and brief are untouched, so moving a conversation that is not
+/// currently loaded is safe. Returns the new revision.
+fn thread_set_folder(
+    conn: &Connection,
+    id: &str,
+    folder: Option<&str>,
+    updated_at: &str,
+) -> Result<i64, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let current_rev: Option<i64> = tx
+        .query_row("SELECT rev FROM threads WHERE id = ?1", params![id], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let current_rev = current_rev.ok_or_else(|| format!("Thread not found: {id}"))?;
+    let new_rev = current_rev + 1;
+    tx.execute(
+        "UPDATE threads SET folder = ?2, updated_at = ?3, rev = ?4 WHERE id = ?1",
+        params![id, folder, updated_at, new_rev],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(new_rev)
 }
 
 /// Navigator organization (D3): set archived/pinned on a TEXT. Update-only,
@@ -3403,6 +3460,7 @@ fn build_legacy_dataset(dir: &Path) -> Result<LegacyDataset, Vec<MigrationIssue>
                             .unwrap_or_else(|| "Untitled conversation".into()),
                         mode: str_field(item, "mode").unwrap_or_else(|| "text".into()),
                         project_id: str_field(item, "projectId"),
+                        folder: str_field(item, "folder"),
                         refs: str_field(item, "references"),
                         rev: 0,
                         archived: bool_field(item, "archived"),
@@ -4015,6 +4073,18 @@ pub fn db_thread_set_state(
 }
 
 #[tauri::command]
+pub fn db_thread_set_folder(
+    db: State<Db>,
+    id: String,
+    folder: Option<String>,
+    updated_at: String,
+) -> Result<i64, String> {
+    with_conn(&db, |conn| {
+        thread_set_folder(conn, &id, folder.as_deref(), &updated_at)
+    })
+}
+
+#[tauri::command]
 pub fn db_thread_delete(db: State<Db>, id: String) -> Result<(), String> {
     with_conn(&db, |conn| thread_delete(conn, &id))
 }
@@ -4353,6 +4423,7 @@ mod tests {
             title: "Thread".into(),
             mode: "text".into(),
             project_id: None,
+            folder: None,
             refs: None,
             rev: 0,
             archived: false,
@@ -5276,6 +5347,7 @@ mod tests {
     fn contract_thread_meta_fixture_deserializes() {
         let row: ThreadRow = serde_json::from_value(fixture("threadMeta")).unwrap();
         assert_eq!(row.mode, "text");
+        assert_eq!(row.folder, None);
         assert_eq!(
             row.refs.as_deref(),
             Some("Fanon, Black Skin, White Masks (1952).")
@@ -5294,6 +5366,7 @@ mod tests {
         let row: ThreadRow = serde_json::from_value(fixture("threadMetaProject")).unwrap();
         assert_eq!(row.mode, "project");
         assert_eq!(row.project_id.as_deref(), Some("p-1"));
+        assert_eq!(row.folder.as_deref(), Some("Drafts"));
         assert_eq!(row.refs, None);
     }
 
@@ -6011,6 +6084,57 @@ mod tests {
     }
 
     #[test]
+    fn conversation_folders_roundtrip_through_dump_and_set_folder() {
+        let conn = mem();
+        thread_create(&conn, &thread("t1"), None, &[]).unwrap();
+
+        // Default: no folder.
+        assert_eq!(threads_list(&conn).unwrap()[0].folder, None);
+
+        // Move to a folder; the revision bumps and other fields stay.
+        let rev = thread_set_folder(&conn, "t1", Some("Research"), "t2").unwrap();
+        assert!(rev > 0);
+        let threads = threads_list(&conn).unwrap();
+        assert_eq!(threads[0].folder.as_deref(), Some("Research"));
+        assert_eq!(threads[0].title, "Thread");
+
+        // The folder rides the dump → import cycle.
+        let dump = export_dump(&conn).unwrap();
+        assert_eq!(dump.threads[0].folder.as_deref(), Some("Research"));
+        let conn2 = mem();
+        let tx = conn2.unchecked_transaction().unwrap();
+        apply_dump(&tx, &dump).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            threads_list(&conn2).unwrap()[0].folder.as_deref(),
+            Some("Research")
+        );
+
+        // `None` clears it.
+        thread_set_folder(&conn, "t1", None, "t3").unwrap();
+        assert_eq!(threads_list(&conn).unwrap()[0].folder, None);
+    }
+
+    #[test]
+    fn v15_conversation_folder_column_is_repaired() {
+        let conn = mem();
+        assert!(column_exists(&conn, "threads", "folder").unwrap());
+        // A v14 database (column absent) is upgraded by the migration.
+        conn.execute_batch("ALTER TABLE threads DROP COLUMN folder;")
+            .unwrap();
+        conn.pragma_update(None, "user_version", 14).unwrap();
+        ensure_schema(&conn).unwrap();
+        assert!(column_exists(&conn, "threads", "folder").unwrap());
+        // Re-running the step is a no-op (repairable migration).
+        migrate_v15(&conn).unwrap();
+        assert_eq!(
+            conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            SUPPORTED_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
     fn named_snapshots_capture_the_current_body_and_keep_labels() {
         let conn = mem();
         create_text(&conn, &meta("a"), "first state").unwrap();
@@ -6486,6 +6610,7 @@ mod tests {
                     title: "On extractive citation — ça / 東京".into(),
                     mode: "text".into(),
                     project_id: Some("p-1".into()),
+                    folder: Some("Drafts".into()),
                     refs: Some("Fanon, Black Skin, White Masks (1952).".into()),
                     rev: 4,
                     archived: false,
@@ -6498,6 +6623,7 @@ mod tests {
                     title: "Standalone notes".into(),
                     mode: "project".into(),
                     project_id: None,
+                    folder: None,
                     refs: None,
                     rev: 1,
                     archived: true,

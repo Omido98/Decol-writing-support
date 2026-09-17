@@ -10,6 +10,10 @@ import {
 describe("getProvider", () => {
   it("returns the matching provider definition", () => {
     expect(getProvider("anthropic").label).toBe("Anthropic");
+    expect(getProvider("deepseek").label).toBe("DeepSeek");
+    expect(getProvider("deepseek").defaultBaseUrl).toBe(
+      "https://api.deepseek.com",
+    );
   });
 
   it("falls back to the first provider for unknown ids", () => {
@@ -44,6 +48,10 @@ describe("detectProviderFromKey", () => {
   it("does not auto-detect OpenAI from generic sk- keys", () => {
     expect(detectProviderFromKey("sk-123456")).toBeNull();
   });
+
+  it("does not auto-detect DeepSeek from generic sk- keys", () => {
+    expect(detectProviderFromKey("sk-deepseek-123456")).toBeNull();
+  });
 });
 
 describe("inferProviderFromBaseUrl", () => {
@@ -60,6 +68,15 @@ describe("inferProviderFromBaseUrl", () => {
   it("infers openai from api.openai.com", () => {
     expect(inferProviderFromBaseUrl("https://api.openai.com/v1")).toBe(
       "openai",
+    );
+  });
+
+  it("infers deepseek from api.deepseek.com", () => {
+    expect(inferProviderFromBaseUrl("https://api.deepseek.com")).toBe(
+      "deepseek",
+    );
+    expect(inferProviderFromBaseUrl("https://api.deepseek.com/v1")).toBe(
+      "deepseek",
     );
   });
 

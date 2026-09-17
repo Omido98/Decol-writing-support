@@ -94,6 +94,8 @@ export interface ThreadMetaWire {
   title: string;
   mode: string;
   projectId: string | null;
+  /** One-level folder name for organizing conversations (null = none). */
+  folder: string | null;
   references: string | null;
   rev: number;
   /** Navigator organization (D3); serde/legacy defaults false. */
@@ -186,6 +188,7 @@ function threadMetaToWire(meta: ThreadMeta, rev: number): ThreadMetaWire {
     // Legacy in-memory rows may predate the required mode.
     mode: meta.mode ?? "text",
     projectId: meta.projectId ?? null,
+    folder: meta.folder ?? null,
     references: meta.references ?? null,
     rev,
     archived: meta.archived ?? false,
@@ -201,6 +204,7 @@ function threadMetaFromWire(row: ThreadMetaWire): ThreadMeta {
     title: row.title,
     mode: row.mode === "project" ? "project" : "text",
     ...(row.projectId != null ? { projectId: row.projectId } : {}),
+    ...(row.folder != null ? { folder: row.folder } : {}),
     ...(row.references != null ? { references: row.references } : {}),
     ...(row.archived ? { archived: true } : {}),
     ...(row.pinned ? { pinned: true } : {}),
@@ -614,6 +618,13 @@ export interface Repository {
     patch: { archived?: boolean; pinned?: boolean },
     updatedAt: string,
   ): Promise<void>;
+  /** Move a thread to a folder (null = no folder). Metadata-only,
+   * revision-checked; the messages and brief are untouched. */
+  threadSetFolder(
+    id: string,
+    folder: string | null,
+    updatedAt: string,
+  ): Promise<void>;
   threadDelete(id: string): Promise<void>;
 
   // Save-state observability (acknowledgment & retry)
@@ -878,6 +889,7 @@ const GATED_MUTATIONS = [
   "threadDelete",
   "textSetState",
   "threadSetState",
+  "threadSetFolder",
   "sourceCreate",
   "sourceSave",
   "sourceDelete",
@@ -1552,6 +1564,16 @@ function createSqliteRepository(): Repository {
           pinned: patch.pinned ?? null,
           updatedAt,
         }),
+      );
+      revs.set(key, newRev);
+    },
+    threadSetFolder: async (id, folder, updatedAt) => {
+      // Metadata-only: flush the thread's pending save first so the move
+      // cannot be overwritten by it.
+      await threadSaver.flush();
+      const key = entityKey("thread", id);
+      const newRev = await track(
+        invoke<number>("db_thread_set_folder", { id, folder, updatedAt }),
       );
       revs.set(key, newRev);
     },
@@ -3013,6 +3035,33 @@ function createJsonRepository(): Repository {
                   ...t,
                   archived: patch.archived ?? (t.archived ?? false),
                   pinned: patch.pinned ?? (t.pinned ?? false),
+                  updatedAt,
+                }
+              : t,
+          );
+          files.push({ path: "threads.json", data: updated });
+        },
+      );
+      revs.set(entityKey("thread", id), newRev);
+    },
+    async threadSetFolder(id, folder, updatedAt) {
+      await threadSaver.flush();
+      const { newRev } = await withRevBatched(
+        "thread",
+        id,
+        null,
+        async () => {
+          const threads = (await loadJson<ThreadMeta[]>("threads.json")) ?? [];
+          return threads.some((t) => t.id === id);
+        },
+        async (files) => {
+          const threads = (await loadJson<ThreadMeta[]>("threads.json")) ?? [];
+          const normalized = folder?.trim() ?? "";
+          const updated = threads.map((t) =>
+            t.id === id
+              ? {
+                  ...t,
+                  ...(normalized ? { folder: normalized } : { folder: undefined }),
                   updatedAt,
                 }
               : t,

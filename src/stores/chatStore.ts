@@ -338,6 +338,9 @@ interface ChatState {
     id: string,
     patch: { archived?: boolean; pinned?: boolean },
   ) => Promise<void>;
+  /** Move a conversation to a folder (null = no folder). Metadata-only:
+   * safe for unloaded conversations. */
+  setThreadFolder: (id: string, folder: string | null) => Promise<void>;
   /** Switch the active thread. Resolves true when the requested owner was
    * found and loaded (or the load was superseded by a newer navigation);
    * false when no such thread exists, so callers can fall back. */
@@ -671,6 +674,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ...t,
               ...(patch.archived !== undefined ? { archived: patch.archived } : {}),
               ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
+              updatedAt: now,
+            }
+          : t,
+      ),
+    }));
+  },
+
+  /** Move a conversation to a folder (metadata-only; null clears it). */
+  setThreadFolder: async (id, folder) => {
+    const normalized = folder?.trim() || null;
+    const now = new Date().toISOString();
+    await repo.threadSetFolder(id, normalized, now);
+    set((s) => ({
+      threads: s.threads.map((t) =>
+        t.id === id
+          ? {
+              ...t,
+              ...(normalized ? { folder: normalized } : { folder: undefined }),
               updatedAt: now,
             }
           : t,

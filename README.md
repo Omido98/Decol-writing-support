@@ -36,6 +36,7 @@ The chat assistant works with any of these providers (OpenAI-compatible):
 | **OpenCode Zen** | Default. Free and paid models, pricing shown in the model picker. |
 | **Anthropic** | Claude models via the Messages API. |
 | **OpenAI** | OpenAI-compatible chat completions. |
+| **DeepSeek** | DeepSeek's OpenAI-compatible API (`api.deepseek.com`). |
 | **Custom** | Any OpenAI-compatible endpoint (LM Studio, Ollama, ...). |
 
 Your API key is stored in your **operating system's keychain** (Windows

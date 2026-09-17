@@ -480,6 +480,49 @@ describe("thread titles", () => {
   });
 });
 
+describe("conversation folders", () => {
+  const meta = {
+    id: "f-1",
+    title: "Chat",
+    mode: "text" as const,
+    createdAt: "t",
+    updatedAt: "t",
+  };
+
+  beforeEach(() => {
+    fakeRepoState.threads.set("f-1", {
+      meta: { ...meta },
+      briefJson: null,
+      messages: [],
+      rev: 0,
+    });
+    useChatStore.setState({
+      activeThreadId: "f-1",
+      threads: [{ ...meta }],
+    });
+  });
+
+  it("moves a thread into a folder and clears it again (metadata-only)", async () => {
+    await useChatStore.getState().setThreadFolder("f-1", "Research");
+    expect(useChatStore.getState().threads[0].folder).toBe("Research");
+    // The move is persisted through the repository, not just in memory.
+    expect(fakeRepoState.threads.get("f-1")?.meta.folder).toBe("Research");
+    // The messages/brief are untouched.
+    expect(fakeRepoState.threads.get("f-1")?.messages).toEqual([]);
+    expect(fakeRepoState.threads.get("f-1")?.briefJson).toBeNull();
+
+    // Whitespace-only input means "no folder" (cleared).
+    await useChatStore.getState().setThreadFolder("f-1", "   ");
+    expect(useChatStore.getState().threads[0].folder).toBeUndefined();
+    expect(fakeRepoState.threads.get("f-1")?.meta.folder).toBeUndefined();
+
+    await useChatStore.getState().setThreadFolder("f-1", "Drafts");
+    await useChatStore.getState().setThreadFolder("f-1", null);
+    expect(useChatStore.getState().threads[0].folder).toBeUndefined();
+    expect(fakeRepoState.threads.get("f-1")?.meta.folder).toBeUndefined();
+  });
+});
+
 describe("composer attachment persistence (D2)", () => {
   beforeEach(async () => {
     // Exercise the browser (localStorage) preference path, as the

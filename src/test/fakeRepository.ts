@@ -511,6 +511,13 @@ export const fakeRepository: Repository = {
     };
     entry.rev += 1;
   },
+  async threadSetFolder(id, folder, updatedAt) {
+    await maybeFail();
+    const entry = fakeRepoState.threads.get(id);
+    if (!entry) throw new Error(`Thread not found: ${id}`);
+    entry.meta = { ...entry.meta, folder: folder ?? undefined, updatedAt };
+    entry.rev += 1;
+  },
   async threadDelete(id) {
     await maybeFail();
     fakeRepoState.threads.delete(id);

@@ -290,6 +290,7 @@ function canonicalDump(): CanonicalDump {
         title: "Thread",
         mode: "text",
         projectId: null,
+        folder: null,
         references: null,
         rev: 0,
         archived: false,
