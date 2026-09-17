@@ -29,6 +29,7 @@ export type WorkspaceView =
       prefill?: { content: string; title?: string; folder?: string };
     }
   | { kind: "project"; id: string }
+  | { kind: "brief"; id: string }
   | { kind: "discussion"; id?: string | null };
 
 export interface ShellState {
@@ -65,6 +66,8 @@ interface AppState extends ShellState {
   setView: (view: WorkspaceView) => void;
   /** Open a project's page. */
   openProject: (id: string) => void;
+  /** Open a project's brief view (read/edit and brief chat). */
+  openBrief: (id: string) => void;
   /** Open a document (read view). */
   openText: (id: string) => void;
   /** Open the editor. Saved documents pass the id; a new document gets a
@@ -152,6 +155,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   openProject: (id) => get().setView({ kind: "project", id }),
+  openBrief: (id) => get().setView({ kind: "brief", id }),
   openText: (id) => get().setView({ kind: "read", id }),
 
   openDocument: (options = {}) => {

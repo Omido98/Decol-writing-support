@@ -112,6 +112,7 @@ export default function ProjectNavigator() {
   const view = useAppStore((s) => s.view);
   const setView = useAppStore((s) => s.setView);
   const openProject = useAppStore((s) => s.openProject);
+  const openBrief = useAppStore((s) => s.openBrief);
   const openText = useAppStore((s) => s.openText);
   const openDiscussion = useAppStore((s) => s.openDiscussion);
 
@@ -136,7 +137,7 @@ export default function ProjectNavigator() {
   // Auto-expand the project that owns the current view.
   useEffect(() => {
     const projectId =
-      view.kind === "project"
+      view.kind === "project" || view.kind === "brief"
         ? view.id
         : (view.kind === "read" || view.kind === "edit") && view.id
           ? texts.find((t) => t.id === view.id)?.projectId
@@ -237,11 +238,13 @@ export default function ProjectNavigator() {
         const projectThreads = pinnedFirst(
           threads.filter((t) => t.projectId === project.id && !t.archived),
         );
-        const isBriefActive =
+        const isProjectActive =
           view.kind === "project" && view.id === project.id;
+        const isBriefActive =
+          view.kind === "brief" && view.id === project.id;
         return (
           <div key={project.id}>
-            <div className={rowClass(isBriefActive)}>
+            <div className={rowClass(isProjectActive)}>
               <button
                 type="button"
                 className="shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
@@ -259,7 +262,7 @@ export default function ProjectNavigator() {
               <button
                 type="button"
                 className="flex-1 truncate text-left rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-                aria-current={isBriefActive ? "true" : undefined}
+                aria-current={isProjectActive ? "true" : undefined}
                 onClick={() => openProject(project.id)}
                 title={project.title}
               >
@@ -274,9 +277,9 @@ export default function ProjectNavigator() {
                 {/* Brief */}
                 <button
                   type="button"
-                  className={rowClass(false)}
+                  className={rowClass(isBriefActive)}
                   aria-current={isBriefActive ? "true" : undefined}
-                  onClick={() => openProject(project.id)}
+                  onClick={() => openBrief(project.id)}
                 >
                   <Notebook className="size-3.5 shrink-0" />
                   <span className="truncate">Brief</span>

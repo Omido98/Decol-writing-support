@@ -304,7 +304,7 @@ describe("save acknowledgements (B04)", () => {
   });
 
   it("an intentionally emptied brief still recovers as empty (F03)", async () => {
-    useAppStore.setState({ view: { kind: "project", id: "p-b" } });
+    useAppStore.setState({ view: { kind: "brief", id: "p-b" } });
     const first = render(<DocumentPane onOpenSettings={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: /edit brief/i }));
     const box = screen.getByPlaceholderText(
@@ -325,17 +325,12 @@ describe("save acknowledgements (B04)", () => {
     ).toBe("");
   });
 
-  it("switching project A → B leaks neither the brief body nor the edit dialog", async () => {
+  it("switching project A → B leaks neither the brief body nor the details dialog", async () => {
     useAppStore.setState({ view: { kind: "project", id: "p-a" } });
     render(<DocumentPane onOpenSettings={() => {}} />);
 
-    // Start editing A's brief and leave an edit dialog open with typed text.
-    fireEvent.click(await screen.findByRole("button", { name: /write brief/i }));
-    fireEvent.change(
-      screen.getByPlaceholderText(/Purpose, audience, planned texts/i),
-      { target: { value: "A-only brief text" } },
-    );
-    fireEvent.click(screen.getByRole("button", { name: /edit details/i }));
+    // Open A's details dialog with typed text.
+    fireEvent.click(await screen.findByRole("button", { name: /edit details/i }));
     fireEvent.change(screen.getByLabelText("Title"), {
       target: { value: "Changed A title" },
     });
@@ -347,6 +342,22 @@ describe("save acknowledgements (B04)", () => {
     // No modal leak: the edit dialog is closed, and none of A's fields.
     expect(screen.queryByText("Edit project")).toBeNull();
     expect(screen.queryByDisplayValue("Changed A title")).toBeNull();
+  });
+
+  it("switching brief A → B leaks neither the brief body nor the draft", async () => {
+    useAppStore.setState({ view: { kind: "brief", id: "p-a" } });
+    render(<DocumentPane onOpenSettings={() => {}} />);
+
+    // Start editing A's brief and leave uncommitted text behind.
+    fireEvent.click(await screen.findByRole("button", { name: /write brief/i }));
+    fireEvent.change(
+      screen.getByPlaceholderText(/Purpose, audience, planned texts/i),
+      { target: { value: "A-only brief text" } },
+    );
+
+    // Switch to B (navigator route change).
+    act(() => useAppStore.getState().setView({ kind: "brief", id: "p-b" }));
+    await screen.findByText("Project Beta");
     expect(screen.queryByDisplayValue("A-only brief text")).toBeNull();
 
     // B opens its OWN brief, not A's draft.
@@ -357,8 +368,7 @@ describe("save acknowledgements (B04)", () => {
     expect(briefBox.value).toBe("Beta's stored brief.");
 
     // Returning to A recovers A's own draft (per-project keys, not shared).
-    act(() => useAppStore.getState().setView({ kind: "project", id: "p-a" }));
-    await screen.findByText("Project Alpha");
+    act(() => useAppStore.getState().setView({ kind: "brief", id: "p-a" }));
     fireEvent.click(await screen.findByRole("button", { name: /write brief/i }));
     expect(
       (
@@ -367,5 +377,23 @@ describe("save acknowledgements (B04)", () => {
         ) as HTMLTextAreaElement
       ).value,
     ).toBe("A-only brief text");
+  });
+
+  it("the overview's collapsed brief row opens the brief view", async () => {
+    useAppStore.setState({ view: { kind: "project", id: "p-b" } });
+    render(<DocumentPane onOpenSettings={() => {}} />);
+
+    // The overview summarises the brief instead of rendering it.
+    expect(await screen.findByText("3 words")).toBeDefined();
+
+    fireEvent.click(screen.getByText("Brief"));
+    fireEvent.click(await screen.findByRole("button", { name: /edit brief/i }));
+    expect(
+      (
+        screen.getByPlaceholderText(
+          /Purpose, audience, planned texts/i,
+        ) as HTMLTextAreaElement
+      ).value,
+    ).toBe("Beta's stored brief.");
   });
 });

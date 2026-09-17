@@ -14,6 +14,7 @@ import {
   FolderPlus,
   Focus,
   MessageSquarePlus,
+  Notebook,
   Search,
 } from "lucide-react";
 
@@ -53,6 +54,7 @@ export default function CommandPalette({
   const toggleFocusMode = useAppStore((s) => s.toggleFocusMode);
   const openText = useAppStore((s) => s.openText);
   const openProject = useAppStore((s) => s.openProject);
+  const openBrief = useAppStore((s) => s.openBrief);
   const openDiscussion = useAppStore((s) => s.openDiscussion);
 
   const texts = useLibraryStore((s) => s.texts);
@@ -189,6 +191,13 @@ export default function CommandPalette({
         hint: "Project",
         run: () => openProject(p.id),
       });
+      out.push({
+        id: `brief:${p.id}`,
+        icon: Notebook,
+        label: p.title,
+        hint: "Brief",
+        run: () => openBrief(p.id),
+      });
     }
     for (const t of texts) {
       out.push({
@@ -228,7 +237,10 @@ export default function CommandPalette({
             hint: hit.excerpt || "Full-text match",
             run: () => {
               if (hit.kind === "text") openText(hit.docId);
-              else if (hit.kind === "project") openProject(hit.docId);
+              // Project hits come from either the title (empty excerpt) or
+              // the brief body (excerpt): the latter belong in the brief view.
+              else if (hit.kind === "project")
+                hit.excerpt ? openBrief(hit.docId) : openProject(hit.docId);
               else openDiscussion(hit.docId);
             },
           });
@@ -247,6 +259,7 @@ export default function CommandPalette({
     createThread,
     setView,
     openProject,
+    openBrief,
     openText,
     openDiscussion,
     toggleFocusMode,

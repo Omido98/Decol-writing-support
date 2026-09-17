@@ -5,6 +5,7 @@ import LibraryReader from "@/components/library/LibraryReader";
 import DocumentEditorView from "@/components/editor/DocumentEditorView";
 import LibraryList from "@/components/library/LibraryList";
 import ProjectDetail from "@/components/library/ProjectDetail";
+import ProjectBriefView from "@/components/library/ProjectBriefView";
 import ChatTab from "@/components/tabs/ChatTab";
 import { Button } from "@/components/ui/button";
 import { BookPlus, MessageSquarePlus } from "lucide-react";
@@ -21,6 +22,8 @@ export default function DocumentPane({
   const view = useAppStore((s) => s.view);
   const setView = useAppStore((s) => s.setView);
   const openText = useAppStore((s) => s.openText);
+  const openProject = useAppStore((s) => s.openProject);
+  const openBrief = useAppStore((s) => s.openBrief);
   const openNewDocument = useAppStore((s) => s.openNewDocument);
   // A dataset replacement (restore) must replace what is on screen, even
   // when the ids are identical: remount the pane on every generation bump.
@@ -54,13 +57,24 @@ export default function DocumentPane({
         return (
           <ProjectDetail
             // Keyed by project identity: switching projects fully resets
-            // the brief editor and edit-dialog state (no A → B leakage).
+            // the edit-dialog state (no A → B leakage).
             key={view.id}
             id={view.id}
             onBack={() => setView({ kind: "list" })}
             onOpenText={openText}
             onEditText={(id) => setView({ kind: "edit", id })}
             onNewText={(projectId) => openNewDocument({ projectId })}
+            onOpenBrief={openBrief}
+          />
+        );
+      case "brief":
+        return (
+          <ProjectBriefView
+            // Keyed by project identity: switching projects resets the
+            // brief editor and cannot leak another project's draft.
+            key={view.id}
+            id={view.id}
+            onBack={() => openProject(view.id)}
           />
         );
       case "discussion":
