@@ -636,10 +636,16 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   // ── Show chat agent settings (web search + prompt) when explicitly opened ──
   if (showConfig) {
     return (
-      <ChatSettings
-        onDone={() => setShowConfig(false)}
-        onOpenSettings={onOpenSettings}
-      />
+      // The shell clips its pane: the tall settings form must scroll here
+      // or everything below the fold (prompts, Save) is unreachable.
+      <div className="h-full overflow-y-auto p-4">
+        <div className="max-w-2xl mx-auto">
+          <ChatSettings
+            onDone={() => setShowConfig(false)}
+            onOpenSettings={onOpenSettings}
+          />
+        </div>
+      </div>
     );
   }
 
