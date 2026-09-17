@@ -25,6 +25,11 @@ export interface ThreadMeta {
   /** Project the thread is linked to (brief agent or text-in-project). */
   projectId?: string;
   /**
+   * Optional one-level folder name for organizing conversations
+   * (standalone and project-linked alike). Absent = no folder.
+   */
+  folder?: string;
+  /**
    * Free-text reference material the user gave before the chat started
    * (links, authors, books, theories). Included in every send.
    */

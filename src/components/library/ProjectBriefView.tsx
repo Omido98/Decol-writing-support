@@ -6,7 +6,16 @@ import { useDraftStore, flushDrafts } from "@/stores/draftStore";
 import { useAppStore } from "@/stores/useAppStore";
 import { repo } from "@/utils/repository";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ArrowLeft, BookOpenCheck, Check, Pencil, Save } from "lucide-react";
 
 /**
@@ -32,6 +41,10 @@ export default function ProjectBriefView({
   const [briefDraft, setBriefDraft] = useState("");
   const [briefSaved, setBriefSaved] = useState(false);
   const [briefSaving, setBriefSaving] = useState(false);
+  // Renaming the project (the brief carries its title) from the view the
+  // title is read in — no detour through the project's Edit details.
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameTitle, setRenameTitle] = useState("");
 
   // Draft session: the brief draft lives OUT of component state, so
   // switching projects/tabs keeps it and a restart recovers it.
@@ -119,6 +132,16 @@ export default function ProjectBriefView({
     setEditingBrief(false);
   };
 
+  const handleRenameProject = async () => {
+    const trimmed = renameTitle.trim();
+    if (!trimmed || trimmed === project.title) {
+      setRenameOpen(false);
+      return;
+    }
+    await updateProject(id, { title: trimmed });
+    setRenameOpen(false);
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
@@ -136,6 +159,18 @@ export default function ProjectBriefView({
           <span className="font-semibold text-text-primary truncate">
             {project.title}
           </span>
+          <button
+            type="button"
+            onClick={() => {
+              setRenameTitle(project.title);
+              setRenameOpen(true);
+            }}
+            className="shrink-0 rounded p-1 hover:bg-border transition-colors"
+            title="Rename the project (the brief carries its title)"
+            aria-label="Rename project"
+          >
+            <Pencil className="size-3.5 text-text-secondary" />
+          </button>
           <span className="shrink-0 px-2 py-0.5 rounded-full bg-primary/10 border border-primary/30 text-[11px] font-medium text-text-primary">
             Brief
           </span>
@@ -232,6 +267,37 @@ export default function ProjectBriefView({
           )}
         </div>
       </div>
+
+      {/* Rename the project (the brief is identified by its title) */}
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename project</DialogTitle>
+            <DialogDescription>
+              The project brief is identified by this title everywhere.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={renameTitle}
+            onChange={(e) => setRenameTitle(e.target.value)}
+            aria-label="Project title"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleRenameProject();
+            }}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-primary hover:bg-primary/80 text-primary-foreground"
+              onClick={() => void handleRenameProject()}
+            >
+              Rename
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

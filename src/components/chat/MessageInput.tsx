@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, type ChangeEvent, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { BookMarked, FileText, FolderOpen, Loader2, Paperclip, Send, Square, X } from "lucide-react";
+import { BookMarked, FileText, FolderOpen, Globe, Loader2, Paperclip, Send, Square, Telescope, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTokenEstimate, TOKEN_WARN_THRESHOLD } from "@/utils/tokens";
 import { UPLOAD_ACCEPT } from "@/utils/fileParse";
@@ -36,6 +36,14 @@ interface MessageInputProps {
   projectBriefIncluded?: boolean;
   /** Toggles project brief inclusion. */
   onToggleProjectBrief?: () => void;
+  /** Whether web search is enabled for the next send. */
+  webSearchEnabled?: boolean;
+  /** Whether deep research is enabled for the next send. */
+  deepResearchEnabled?: boolean;
+  /** Toggles web search (applies to the next sends). */
+  onToggleWebSearch?: () => void;
+  /** Toggles deep research (applies to the next sends). */
+  onToggleDeepResearch?: () => void;
 }
 
 export default function MessageInput({
@@ -55,6 +63,10 @@ export default function MessageInput({
   projectTitle = null,
   projectBriefIncluded = true,
   onToggleProjectBrief,
+  webSearchEnabled = true,
+  deepResearchEnabled = false,
+  onToggleWebSearch,
+  onToggleDeepResearch,
 }: MessageInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -100,16 +112,72 @@ export default function MessageInput({
     autoResize();
   }, [value, autoResize]);
 
+  const showToggles = !!onToggleWebSearch && !!onToggleDeepResearch;
   const hasChips =
     projectTitle != null ||
     attachedTexts.length > 0 ||
-    fileAttachments.length > 0;
+    fileAttachments.length > 0 ||
+    showToggles;
 
   return (
     <div className="border-t border-border bg-background">
-      {/* Project brief toggle + attached contexts */}
+      {/* Agent toggles + project brief toggle + attached contexts */}
       {hasChips && (
         <div className="flex items-center gap-1.5 px-4 pt-3 flex-wrap">
+          {onToggleWebSearch && (
+            <button
+              type="button"
+              onClick={onToggleWebSearch}
+              disabled={disabled}
+              aria-pressed={webSearchEnabled}
+              title={
+                webSearchEnabled
+                  ? "Web search is ON: the agent may search the web and fetch pages to check facts. Click to turn it off."
+                  : "Web search is OFF: the agent answers without web tools. Click to turn it on (one search and up to 5 pages per turn)."
+              }
+              className={cn(
+                "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors disabled:opacity-50",
+                webSearchEnabled
+                  ? "bg-primary/10 border-primary/40 text-text-primary"
+                  : "bg-surface border-border text-text-muted",
+              )}
+            >
+              <Globe
+                className={cn(
+                  "size-3 shrink-0",
+                  webSearchEnabled ? "text-primary" : "text-text-muted",
+                )}
+              />
+              Web search
+            </button>
+          )}
+          {onToggleDeepResearch && (
+            <button
+              type="button"
+              onClick={onToggleDeepResearch}
+              disabled={disabled}
+              aria-pressed={deepResearchEnabled}
+              title={
+                deepResearchEnabled
+                  ? "Deep research is ON: multiple searches and many page fetches until key claims are verified (slower, more tokens). Click to turn it off."
+                  : "Deep research is OFF. Click to research thoroughly: multiple searches with varied queries and many page fetches. Needs web search."
+              }
+              className={cn(
+                "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors disabled:opacity-50",
+                deepResearchEnabled
+                  ? "bg-primary/10 border-primary/40 text-text-primary"
+                  : "bg-surface border-border text-text-muted",
+              )}
+            >
+              <Telescope
+                className={cn(
+                  "size-3 shrink-0",
+                  deepResearchEnabled ? "text-primary" : "text-text-muted",
+                )}
+              />
+              Deep research
+            </button>
+          )}
           {projectTitle != null && onToggleProjectBrief && (
             <button
               type="button"

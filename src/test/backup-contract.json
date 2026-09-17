@@ -257,6 +257,7 @@
         {
           "archived": false,
           "createdAt": "2026-01-05T00:00:00.000Z",
+          "folder": "Drafts",
           "id": "th-1",
           "mode": "text",
           "pinned": true,
@@ -269,6 +270,7 @@
         {
           "archived": true,
           "createdAt": "2026-01-06T00:00:00.000Z",
+          "folder": null,
           "id": "th-2",
           "mode": "project",
           "pinned": false,

@@ -48,11 +48,13 @@ import {
   ClipboardList,
   FolderOpen,
   MessageSquarePlus,
+  Pencil,
   PencilLine,
   Settings,
   Trash2,
 } from "lucide-react";
 import BriefForm from "@/components/chat/BriefForm";
+import RenameThreadDialog from "@/components/chat/RenameThreadDialog";
 
 interface ChatTabProps {
   /** Opens the general Settings dialog (used to configure the API). */
@@ -185,6 +187,7 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   const loadThreads = useChatStore((s) => s.loadThreads);
   const createThread = useChatStore((s) => s.createThread);
   const deleteThread = useChatStore((s) => s.deleteThread);
+  const renameThread = useChatStore((s) => s.renameThread);
 
   const activeThreadId = useChatStore((s) => s.activeThreadId);
   const threadLoaded = useChatStore((s) => s.threadLoaded);
@@ -386,6 +389,10 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   // ── Input state ──
   const [showConfig, setShowConfig] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [renamingThread, setRenamingThread] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
 
   // ── Writing brief (edit dialog for a started thread) ──
   const [briefOpen, setBriefOpen] = useState(false);
@@ -510,6 +517,29 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
     (key: string) => void sendText({ regenerateKey: key }),
     [sendText],
   );
+
+  // ── Agent toggles (composer pills) ──
+  // The flags are global chat config read live by the send pipeline, so a
+  // click applies to the NEXT send immediately (no Save step).
+  const webSearchOn = config.webSearchEnabled ?? true;
+  const deepResearchOn = config.deepResearchEnabled ?? false;
+  const handleToggleWebSearch = useCallback(() => {
+    const on = !webSearchOn;
+    // Deep research has no web tools to drive when search is off; the UI
+    // must never show it as active while it does nothing.
+    void setConfig(
+      on ? { webSearchEnabled: true } : { webSearchEnabled: false, deepResearchEnabled: false },
+    );
+  }, [webSearchOn, setConfig]);
+  const handleToggleDeepResearch = useCallback(() => {
+    const on = !deepResearchOn;
+    // Deep research needs the web tools to do anything.
+    void setConfig(
+      on
+        ? { deepResearchEnabled: true, webSearchEnabled: true }
+        : { deepResearchEnabled: false },
+    );
+  }, [deepResearchOn, setConfig]);
 
   // ── Start a text thread from the writing brief ──
   // The composed brief becomes the first (structured) user message; the
@@ -658,9 +688,9 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
         </p>
         <p className="text-text-muted text-sm mt-2 max-w-md">
           The chat assistant needs an API key to work. You can use OpenCode
-          Zen, Anthropic, OpenAI, or any OpenAI-compatible endpoint. Your key
-          is stored securely in your system&apos;s keychain and never leaves
-          your computer.
+          Zen, Anthropic, OpenAI, DeepSeek, or any OpenAI-compatible
+          endpoint. Your key is stored securely in your system&apos;s keychain
+          and never leaves your computer.
         </p>
         <Button
           className="bg-primary hover:bg-primary/80 text-primary-foreground mt-6"
@@ -712,12 +742,31 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
                 <SelectItem key={t.id} value={t.id}>
                   <span className="truncate max-w-[360px] block">
                     {t.mode === "project" ? "[Brief] " : ""}
+                    {t.folder && (
+                      <span className="text-text-muted">{t.folder} — </span>
+                    )}
                     {t.title}
                   </span>
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() =>
+              activeThread &&
+              setRenamingThread({
+                id: activeThread.id,
+                title: activeThread.title,
+              })
+            }
+            title="Rename conversation"
+            aria-label="Rename conversation"
+            disabled={!activeThread}
+          >
+            <Pencil className="size-3.5 text-text-secondary" />
+          </Button>
           {!isProjectThread && threadProject && (
             <span
               className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-alt border border-border text-[11px] font-medium text-text-secondary max-w-[180px]"
@@ -1017,6 +1066,10 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
                     useChatStore.getState().toggleBriefInclude(threadProjectId)
                 : undefined
             }
+            webSearchEnabled={webSearchOn}
+            deepResearchEnabled={deepResearchOn}
+            onToggleWebSearch={handleToggleWebSearch}
+            onToggleDeepResearch={handleToggleDeepResearch}
           />
         </>
       )}
@@ -1027,6 +1080,13 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
         selectedIds={attachments.map((a) => a.id)}
         onConfirm={handleAttachmentsConfirmed}
         projectId={threadProjectId ?? undefined}
+      />
+
+      {/* Rename the current conversation (same dialog as the navigator) */}
+      <RenameThreadDialog
+        thread={renamingThread}
+        onClose={() => setRenamingThread(null)}
+        onRename={renameThread}
       />
 
       {/* Edit the writing brief of a started thread */}

@@ -25,6 +25,14 @@ interface ChatComposerProps {
   projectTitle?: string | null;
   projectBriefIncluded?: boolean;
   onToggleProjectBrief?: () => void;
+  /** Whether web search is enabled for the next send. */
+  webSearchEnabled?: boolean;
+  /** Whether deep research is enabled for the next send. */
+  deepResearchEnabled?: boolean;
+  /** Toggles web search (applies to the next sends). */
+  onToggleWebSearch?: () => void;
+  /** Toggles deep research (applies to the next sends). */
+  onToggleDeepResearch?: () => void;
 }
 
 /**
@@ -48,6 +56,10 @@ export default function ChatComposer({
   projectTitle,
   projectBriefIncluded,
   onToggleProjectBrief,
+  webSearchEnabled,
+  deepResearchEnabled,
+  onToggleWebSearch,
+  onToggleDeepResearch,
 }: ChatComposerProps) {
   const value = useChatStore((s) => s.drafts[s.activeThreadId ?? ""] ?? "");
   const setDraft = useChatStore((s) => s.setDraft);
@@ -101,6 +113,10 @@ export default function ChatComposer({
         projectTitle={projectTitle}
         projectBriefIncluded={projectBriefIncluded}
         onToggleProjectBrief={onToggleProjectBrief}
+        webSearchEnabled={webSearchEnabled}
+        deepResearchEnabled={deepResearchEnabled}
+        onToggleWebSearch={onToggleWebSearch}
+        onToggleDeepResearch={onToggleDeepResearch}
       />
     </>
   );

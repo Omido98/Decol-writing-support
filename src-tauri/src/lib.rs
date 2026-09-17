@@ -1825,6 +1825,7 @@ pub fn run() {
             repository::db_thread_rename,
             repository::db_text_set_state,
             repository::db_thread_set_state,
+            repository::db_thread_set_folder,
             repository::db_thread_delete,
             repository::db_export,
             repository::db_restore,

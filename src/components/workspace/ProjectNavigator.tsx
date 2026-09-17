@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -8,8 +8,9 @@ import {
   ChevronRight,
   CircleAlert,
   ClipboardList,
-  FolderPlus,
+  FolderInput,
   FolderOpen,
+  FolderPlus,
   MessageSquarePlus,
   Notebook,
   Pencil,
@@ -20,6 +21,7 @@ import { useLibraryStore } from "@/stores/libraryStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useThreadFailedSends } from "@/components/chat/useThreadOperation";
+import RenameThreadDialog from "@/components/chat/RenameThreadDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -30,11 +32,48 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import type { ThreadMeta } from "@/types";
 
 /** Pinned rows first; within each group the recency order is preserved. */
 function pinnedFirst<T extends { pinned?: boolean }>(list: T[]): T[] {
   return [...list].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
 }
+
+/**
+ * Group conversations by their one-level folder: pinned-first ungrouped
+ * rows, then folders alphabetically with pinned-first rows inside. Empty
+ * folder names ("  ") count as no folder.
+ */
+function groupByFolder<T extends { folder?: string; pinned?: boolean }>(
+  items: T[],
+): {
+  ungrouped: T[];
+  folders: { name: string; items: T[] }[];
+} {
+  const ungrouped: T[] = [];
+  const byFolder = new Map<string, T[]>();
+  for (const item of items) {
+    const name = item.folder?.trim();
+    if (!name) {
+      ungrouped.push(item);
+      continue;
+    }
+    const list = byFolder.get(name) ?? [];
+    list.push(item);
+    byFolder.set(name, list);
+  }
+  const folders = [...byFolder.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, list]) => ({ name, items: pinnedFirst(list) }));
+  return { ungrouped: pinnedFirst(ungrouped), folders };
+}
+
+const rowClass = (active: boolean) =>
+  `w-full text-left px-2 py-1.5 rounded-md text-sm transition-colors flex items-center gap-2 cursor-pointer ${
+    active
+      ? "bg-selection text-text-primary"
+      : "text-text-secondary hover:bg-surface-alt hover:text-text-primary"
+  }`;
 
 /** Hover actions on a navigator row: pin toggle + archive. Pinned rows
  * keep their pin button visible; the keyboard surfaces them too
@@ -84,6 +123,34 @@ function RowFlagActions({
   );
 }
 
+/** A small hover action on a conversation row (move / rename). */
+function RowAction({
+  label,
+  title,
+  onClick,
+  icon,
+}: {
+  label: string;
+  title: string;
+  onClick: () => void;
+  icon: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className="shrink-0 rounded p-0.5 hover:bg-border transition-colors opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      aria-label={label}
+      title={title}
+    >
+      {icon}
+    </button>
+  );
+}
+
 /**
  * A failed send retained by the operation service (B15) — visible from
  * the navigator even when the conversation is not open, so a failure that
@@ -106,7 +173,8 @@ function ThreadFailureBadge({ threadId }: { threadId: string }) {
 /**
  * The workspace navigator: projects (with their brief, documents, and
  * discussions), standalone documents, and standalone conversations.
- * Selection drives the workspace view; the selection itself persists.
+ * Conversations group by their one-level folder at both levels (inside
+ * projects and standalone); selection drives the workspace view.
  */
 export default function ProjectNavigator() {
   const view = useAppStore((s) => s.view);
@@ -115,24 +183,36 @@ export default function ProjectNavigator() {
   const openBrief = useAppStore((s) => s.openBrief);
   const openText = useAppStore((s) => s.openText);
   const openDiscussion = useAppStore((s) => s.openDiscussion);
+  const setActionError = useAppStore((s) => s.setActionError);
 
   const texts = useLibraryStore((s) => s.texts);
   const createText = useLibraryStore((s) => s.createText);
+  const setTextState = useLibraryStore((s) => s.setTextState);
   const projects = useProjectStore((s) => s.projects);
   const createProject = useProjectStore((s) => s.createProject);
 
   const threads = useChatStore((s) => s.threads);
   const createThread = useChatStore((s) => s.createThread);
   const setThreadState = useChatStore((s) => s.setThreadState);
-  const setTextState = useLibraryStore((s) => s.setTextState);
-  const setActionError = useAppStore((s) => s.setActionError);
-  const [archivedOpen, setArchivedOpen] = useState(false);
+  const renameThread = useChatStore((s) => s.renameThread);
+  const setThreadFolder = useChatStore((s) => s.setThreadFolder);
 
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  /** Folder groups are expanded by default; only the collapsed ones are
+   * tracked, so moving a conversation into a folder never hides it. */
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(
+    new Set(),
+  );
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(
     null,
   );
-  const renameThread = useChatStore((s) => s.renameThread);
+  const [moveTarget, setMoveTarget] = useState<{
+    id: string;
+    title: string;
+    folder?: string;
+  } | null>(null);
+  const [moveFolder, setMoveFolder] = useState("");
 
   // Auto-expand the project that owns the current view.
   useEffect(() => {
@@ -154,6 +234,14 @@ export default function ProjectNavigator() {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      return next;
+    });
+
+  const toggleFolder = (key: string) =>
+    setCollapsedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
 
@@ -181,31 +269,162 @@ export default function ProjectNavigator() {
     }
   };
 
+  const handleNewDiscussionInFolder = async (folder: string) => {
+    try {
+      const id = await createThread();
+      await setThreadFolder(id, folder);
+      openDiscussion(id);
+    } catch (err) {
+      setActionError(
+        `Could not start a conversation: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  };
+
+  const openMoveDialog = (thread: ThreadMeta) => {
+    setMoveFolder(thread.folder ?? "");
+    setMoveTarget({
+      id: thread.id,
+      title: thread.title,
+      ...(thread.folder ? { folder: thread.folder } : {}),
+    });
+  };
+
+  /** `null` removes the conversation from its folder; otherwise the
+   * typed folder name applies (empty = no folder). */
+  const submitMove = async (folderOverride?: string | null) => {
+    if (!moveTarget) return;
+    const folder =
+      folderOverride === null ? "" : (folderOverride ?? moveFolder);
+    await setThreadFolder(moveTarget.id, folder.trim() || null);
+    setMoveTarget(null);
+    setMoveFolder("");
+  };
+
   // Archived rows leave the main lists; they live in the Archived section.
   const standaloneTexts = pinnedFirst(
     texts.filter((t) => !t.projectId && !t.archived),
   );
-  const standaloneThreads = pinnedFirst(
-    threads.filter(
-      (t) =>
-        (!t.projectId || !projects.some((p) => p.id === t.projectId)) &&
-        !t.archived,
-    ),
+  const standaloneThreads = threads.filter(
+    (t) =>
+      (!t.projectId || !projects.some((p) => p.id === t.projectId)) &&
+      !t.archived,
   );
   const archivedTexts = texts.filter((t) => t.archived);
   const archivedThreads = threads.filter((t) => t.archived);
   const archivedCount = archivedTexts.length + archivedThreads.length;
 
-  const rowClass = (active: boolean) =>
-    `w-full text-left px-2 py-1.5 rounded-md text-sm transition-colors flex items-center gap-2 cursor-pointer ${
-      active
-        ? "bg-selection text-text-primary"
-        : "text-text-secondary hover:bg-surface-alt hover:text-text-primary"
-    }`;
+  /** Every known conversation folder, for the move dialog's suggestions. */
+  const folderSuggestions = [
+    ...new Set(
+      threads
+        .map((t) => t.folder?.trim())
+        .filter((f): f is string => !!f),
+    ),
+  ].sort((a, b) => a.localeCompare(b));
 
   const activeTextId = view.kind === "read" || view.kind === "edit" ? view.id : null;
   const activeThreadId =
     view.kind === "discussion" ? (view.id ?? null) : null;
+
+  /** One conversation row with its full hover actions. */
+  const renderThreadRow = (t: ThreadMeta) => (
+    <div key={t.id} className={`${rowClass(activeThreadId === t.id)} group`}>
+      <button
+        type="button"
+        className="flex-1 flex items-center gap-2 min-w-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        aria-current={activeThreadId === t.id ? "true" : undefined}
+        onClick={() => openDiscussion(t.id)}
+        title={t.title}
+      >
+        <FolderOpen className="size-3.5 shrink-0" />
+        <span className="truncate">{t.title}</span>
+        <ThreadFailureBadge threadId={t.id} />
+      </button>
+      <RowFlagActions
+        pinned={!!t.pinned}
+        label={`conversation ${t.title}`}
+        onTogglePin={() => void setThreadState(t.id, { pinned: !t.pinned })}
+        onArchive={() => void setThreadState(t.id, { archived: true })}
+      />
+      <RowAction
+        label={`Move conversation ${t.title} to a folder`}
+        title={t.folder ? `In folder “${t.folder}” — move` : "Move to folder"}
+        onClick={() => openMoveDialog(t)}
+        icon={
+          <FolderInput
+            className={`size-3 ${t.folder ? "text-primary" : ""}`}
+          />
+        }
+      />
+      <RowAction
+        label={`Rename conversation ${t.title}`}
+        title="Rename"
+        onClick={() => setRenaming({ id: t.id, title: t.title })}
+        icon={<Pencil className="size-3" />}
+      />
+    </div>
+  );
+
+  /** Ungrouped conversations, then the folder groups (expanded unless
+   * the user collapsed them). `scope` keeps folder keys unique between
+   * the standalone list and each project. */
+  const renderThreadGroups = (items: ThreadMeta[], scope: string) => {
+    const { ungrouped, folders } = groupByFolder(items);
+    return (
+      <>
+        {ungrouped.map(renderThreadRow)}
+        {folders.map(({ name, items: members }) => {
+          const key = `${scope}::${name}`;
+          const collapsed = collapsedFolders.has(key);
+          return (
+            <div key={key}>
+              <div className="flex items-center gap-1 group">
+                <button
+                  type="button"
+                  className="flex-1 flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-alt hover:text-text-primary transition-colors min-w-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                  aria-expanded={!collapsed}
+                  aria-controls={`folder-${key}-children`}
+                  onClick={() => toggleFolder(key)}
+                  title={name}
+                >
+                  {collapsed ? (
+                    <ChevronRight className="size-3 shrink-0" />
+                  ) : (
+                    <ChevronDown className="size-3 shrink-0" />
+                  )}
+                  <FolderOpen className="size-3.5 shrink-0" />
+                  <span className="truncate font-medium">{name}</span>
+                  <span className="shrink-0 text-[10px] text-text-muted">
+                    {members.length}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="shrink-0 rounded p-0.5 hover:bg-border transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                  onClick={() => void handleNewDiscussionInFolder(name)}
+                  aria-label={`New conversation in ${name}`}
+                  title={`New conversation in “${name}”`}
+                >
+                  <MessageSquarePlus className="size-3" />
+                </button>
+              </div>
+              {!collapsed && (
+                <div
+                  id={`folder-${key}-children`}
+                  className="ml-4 border-l border-border pl-2 space-y-0.5"
+                >
+                  {members.map(renderThreadRow)}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </>
+    );
+  };
 
   return (
     <nav
@@ -235,8 +454,8 @@ export default function ProjectNavigator() {
         const projectTexts = pinnedFirst(
           texts.filter((t) => t.projectId === project.id && !t.archived),
         );
-        const projectThreads = pinnedFirst(
-          threads.filter((t) => t.projectId === project.id && !t.archived),
+        const projectThreads = threads.filter(
+          (t) => t.projectId === project.id && !t.archived,
         );
         const isProjectActive =
           view.kind === "project" && view.id === project.id;
@@ -297,20 +516,7 @@ export default function ProjectNavigator() {
                     <span className="truncate">{t.title}</span>
                   </button>
                 ))}
-                {projectThreads.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={rowClass(activeThreadId === t.id)}
-                    aria-current={activeThreadId === t.id ? "true" : undefined}
-                    onClick={() => openDiscussion(t.id)}
-                    title={t.title}
-                  >
-                    <FolderOpen className="size-3.5 shrink-0" />
-                    <span className="truncate">{t.title}</span>
-                    <ThreadFailureBadge threadId={t.id} />
-                  </button>
-                ))}
+                {renderThreadGroups(projectThreads, project.id)}
               </div>
             )}
           </div>
@@ -387,7 +593,7 @@ export default function ProjectNavigator() {
         </div>
       ))}
 
-      {/* Standalone conversations */}
+      {/* Standalone conversations, grouped by folder */}
       <div className="flex items-center justify-between px-2 pt-3 pb-1">
         <span className="text-[11px] font-medium uppercase tracking-wide text-text-secondary select-none">
           Conversations
@@ -403,39 +609,7 @@ export default function ProjectNavigator() {
           <MessageSquarePlus className="size-3.5" />
         </Button>
       </div>
-      {standaloneThreads.map((t) => (
-        <div key={t.id} className={`${rowClass(activeThreadId === t.id)} group`}>
-          <button
-            type="button"
-            className="flex-1 flex items-center gap-2 min-w-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            aria-current={activeThreadId === t.id ? "true" : undefined}
-            onClick={() => openDiscussion(t.id)}
-            title={t.title}
-          >
-            <FolderOpen className="size-3.5 shrink-0" />
-            <span className="truncate">{t.title}</span>
-            <ThreadFailureBadge threadId={t.id} />
-          </button>
-          <RowFlagActions
-            pinned={!!t.pinned}
-            label={`conversation ${t.title}`}
-            onTogglePin={() => void setThreadState(t.id, { pinned: !t.pinned })}
-            onArchive={() => void setThreadState(t.id, { archived: true })}
-          />
-          <button
-            type="button"
-            className="shrink-0 rounded p-0.5 hover:bg-border transition-colors opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            onClick={(e) => {
-              e.stopPropagation();
-              setRenaming({ id: t.id, title: t.title });
-            }}
-            aria-label={`Rename conversation ${t.title}`}
-            title="Rename"
-          >
-            <Pencil className="size-3" />
-          </button>
-        </div>
-      ))}
+      {renderThreadGroups(standaloneThreads, "standalone")}
 
       {/* Archived (D3): out of the main lists, restorable, never automatic. */}
       {archivedCount > 0 && (
@@ -500,6 +674,12 @@ export default function ProjectNavigator() {
                     <span className="truncate">{t.title}</span>
                     <ThreadFailureBadge threadId={t.id} />
                   </button>
+                  <RowAction
+                    label={`Rename conversation ${t.title}`}
+                    title="Rename"
+                    onClick={() => setRenaming({ id: t.id, title: t.title })}
+                    icon={<Pencil className="size-3" />}
+                  />
                   <button
                     type="button"
                     className="shrink-0 rounded p-0.5 hover:bg-border transition-colors opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
@@ -519,51 +699,70 @@ export default function ProjectNavigator() {
         </div>
       )}
 
-      {/* Rename conversation */}
+      {/* Move a conversation into a folder (or out of one) */}
       <Dialog
-        open={renaming !== null}
-        onOpenChange={(o) => !o && setRenaming(null)}
+        open={moveTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) {
+            setMoveTarget(null);
+            setMoveFolder("");
+          }
+        }}
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Rename conversation</DialogTitle>
+            <DialogTitle>Move conversation to folder</DialogTitle>
             <DialogDescription>
-              Renaming does not touch the messages.
+              “{moveTarget?.title}” moves to the folder. Its messages are
+              untouched. Leave the name empty to remove it from its folder.
             </DialogDescription>
           </DialogHeader>
           <Input
-            value={renaming?.title ?? ""}
-            onChange={(e) =>
-              setRenaming((r) => (r ? { ...r, title: e.target.value } : r))
-            }
-            aria-label="Conversation title"
+            value={moveFolder}
+            onChange={(e) => setMoveFolder(e.target.value)}
+            placeholder="Folder name…"
+            list="conversation-folders"
+            aria-label="Conversation folder"
             onKeyDown={(e) => {
-              if (e.key === "Enter" && renaming) {
-                void renameThread(renaming.id, renaming.title).then(() =>
-                  setRenaming(null),
-                );
-              }
+              if (e.key === "Enter") void submitMove();
             }}
           />
+          <datalist id="conversation-folders">
+            {folderSuggestions.map((f) => (
+              <option key={f} value={f} />
+            ))}
+          </datalist>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRenaming(null)}>
+            {moveTarget?.folder && (
+              <Button variant="ghost" onClick={() => void submitMove(null)}>
+                Remove from folder
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              onClick={() => {
+                setMoveTarget(null);
+                setMoveFolder("");
+              }}
+            >
               Cancel
             </Button>
             <Button
               className="bg-primary hover:bg-primary/80 text-primary-foreground"
-              onClick={() => {
-                if (renaming) {
-                  void renameThread(renaming.id, renaming.title).then(() =>
-                    setRenaming(null),
-                  );
-                }
-              }}
+              onClick={() => void submitMove()}
             >
-              Rename
+              Move
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Rename conversation (shared with the in-chat title action) */}
+      <RenameThreadDialog
+        thread={renaming}
+        onClose={() => setRenaming(null)}
+        onRename={renameThread}
+      />
     </nav>
   );
 }

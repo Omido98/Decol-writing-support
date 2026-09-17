@@ -185,6 +185,8 @@ export interface DumpThreadRow {
   title: string;
   mode: string;
   projectId: string | null;
+  /** One-level conversation folder (v15); null = no folder. */
+  folder: string | null;
   references: string | null;
   rev: number;
   archived: boolean;
@@ -504,6 +506,7 @@ function normThread(raw: unknown, i: number): DumpThreadRow {
     title: str(row.title, `threads[${i}].title`),
     mode: row.mode == null ? "text" : str(row.mode, `threads[${i}].mode`),
     projectId: optionalStr(row.projectId, `threads[${i}].projectId`),
+    folder: optionalStr(row.folder, `threads[${i}].folder`),
     references: referencesOf(row, `threads[${i}]`),
     rev: int(row.rev, `threads[${i}].rev`, 0),
     archived: bool(row.archived, `threads[${i}].archived`, false),
