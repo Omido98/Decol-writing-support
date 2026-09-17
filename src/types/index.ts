@@ -41,10 +41,23 @@ export interface ThreadMeta {
   updatedAt: string;
 }
 
+/**
+ * A navigator folder (schema v16). Folders group texts and conversations
+ * (mixed) within one scope: `""` is the standalone area, a project id is
+ * that project's area. Membership lives in the items' `folder` name —
+ * the registry keeps empty folders alive and backs create/rename/delete.
+ */
+export interface FolderMeta {
+  id: string;
+  scope: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ──────────────────────────────────────────────
 // Text library
 // ──────────────────────────────────────────────
-
 /** The fixed set of kinds a library text can have. */
 export type TextTypeId =
   | "essay"

@@ -313,6 +313,7 @@ function canonicalDump(): CanonicalDump {
         attachmentsJson: null,
       },
     ],
+    folders: [],
   };
 }
 
@@ -389,6 +390,77 @@ describe("backup validation (canonical dump)", () => {
     const data = canonicalDump();
     data.textContents = [{ ...data.textContents[0], textId: "ghost" }];
     expect(parseBackupBundle(bundleJson(data))).toBeNull();
+  });
+
+  it("accepts folder registry rows and rejects duplicates or unknown scopes", () => {
+    // A standalone folder and a project folder for the dump's project.
+    const withProject = canonicalDump();
+    withProject.projects = [
+      {
+        id: "p1",
+        title: "P",
+        description: null,
+        defaultAudience: null,
+        defaultTone: null,
+        defaultCitations: null,
+        defaultLanguage: null,
+        references: null,
+        briefWordCount: null,
+        rev: 0,
+        createdAt: "c",
+        updatedAt: "u",
+      },
+    ];
+    withProject.folders = [
+      {
+        id: "f1",
+        scope: "",
+        name: "Essays",
+        createdAt: "c",
+        updatedAt: "u",
+      },
+      {
+        id: "f2",
+        scope: "p1",
+        name: "Drafts",
+        createdAt: "c",
+        updatedAt: "u",
+      },
+    ];
+    expect(parseBackupBundle(bundleJson(withProject))).not.toBeNull();
+
+    // Duplicate (scope, name) identity.
+    const duplicate = canonicalDump();
+    duplicate.folders = [
+      {
+        id: "f1",
+        scope: "",
+        name: "Essays",
+        createdAt: "c",
+        updatedAt: "u",
+      },
+      {
+        id: "f2",
+        scope: "",
+        name: "Essays",
+        createdAt: "c",
+        updatedAt: "u",
+      },
+    ];
+    expect(parseBackupBundle(bundleJson(duplicate))).toBeNull();
+
+    // A project-scoped folder pointing at no project in the dump.
+    const orphanScope = canonicalDump();
+    orphanScope.folders = [
+      {
+        id: "f1",
+        scope: "ghost-project",
+        name: "Essays",
+        createdAt: "c",
+        updatedAt: "u",
+      },
+    ];
+    expect(parseBackupBundle(bundleJson(orphanScope))).toBeNull();
   });
 
   it("rejects a dump whose rows reference unknown parents", () => {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useProjectStore } from "@/stores/projectStore";
+import { useFolderStore } from "@/stores/folderStore";
 import { exportTexts, importFiles } from "@/utils/libraryIo";
 import { markdownFromRich } from "@/utils/richMarkdown";
 import { textTypeLabel, type LibraryTextMeta } from "@/types";
@@ -94,6 +95,12 @@ export default function LibraryList({
   const projects = useProjectStore((s) => s.projects);
   const projectsLoaded = useProjectStore((s) => s.projectsLoaded);
   const loadProjects = useProjectStore((s) => s.loadProjects);
+  const registryFolders = useFolderStore((s) => s.folders);
+  const ensureFolders = useFolderStore((s) => s.ensureLoaded);
+
+  useEffect(() => {
+    void ensureFolders();
+  }, [ensureFolders]);
 
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
@@ -128,10 +135,13 @@ export default function LibraryList({
     onOpenProject(id);
   };
 
+  // Folder options: names present on texts PLUS registry folders (so an
+  // empty folder created in the navigator is still selectable/movable to).
   const folders = [
-    ...new Set(
-      texts.map((t) => t.folder).filter((f): f is string => !!f),
-    ),
+    ...new Set([
+      ...texts.map((t) => t.folder).filter((f): f is string => !!f),
+      ...registryFolders.map((f) => f.name),
+    ]),
   ].sort();
 
   const filtered = texts

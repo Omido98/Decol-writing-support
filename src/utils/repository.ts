@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  FolderMeta,
   IncompleteReason,
   LibraryTextMeta,
   ProjectMeta,
@@ -219,6 +220,19 @@ function threadMetaFromLegacyJson(row: ThreadMeta): ThreadMeta {
     ...row,
     mode: row.mode === "project" ? "project" : "text",
   };
+}
+
+/** The folder registry row on the wire (schema v16, camelCase). */
+export interface FolderRowWire {
+  id: string;
+  scope: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function folderFromWire(row: FolderRowWire): FolderMeta {
+  return { ...row };
 }
 
 // ──────────────────────────────────────────────
@@ -627,6 +641,24 @@ export interface Repository {
   ): Promise<void>;
   threadDelete(id: string): Promise<void>;
 
+  // Navigator folders (schema v16)
+  /** The folder registry (standalone + project scopes). */
+  foldersList(): Promise<FolderMeta[]>;
+  /** Create a folder; creating an existing (scope, name) returns that row
+   * (idempotent), so a retry or double-click cannot duplicate it. */
+  folderCreate(folder: FolderMeta): Promise<FolderMeta>;
+  /** Rename a folder: the registry row (when present) and every text and
+   * thread of its scope move in one transaction; item revisions advance. */
+  folderRename(
+    scope: string,
+    oldName: string,
+    newName: string,
+    updatedAt: string,
+  ): Promise<void>;
+  /** Delete a folder: its items move OUT (folder names cleared, revisions
+   * advance) — nothing is deleted. The registry row is removed. */
+  folderDelete(scope: string, name: string): Promise<void>;
+
   // Save-state observability (acknowledgment & retry)
   /** Failures from scheduled saves that have not been retried yet. */
   saveFailures(): SaveFailure[];
@@ -890,6 +922,9 @@ const GATED_MUTATIONS = [
   "textSetState",
   "threadSetState",
   "threadSetFolder",
+  "folderCreate",
+  "folderRename",
+  "folderDelete",
   "sourceCreate",
   "sourceSave",
   "sourceDelete",
@@ -1192,6 +1227,46 @@ function createSaver<A>(
 /** Clear a pending payload's project link (B21c). */
 function dropProjectLink<A extends { meta: { projectId?: string } }>(args: A): A {
   return { ...args, meta: { ...args.meta, projectId: undefined } };
+}
+
+/** A pending metadata payload whose folder name may need rewriting. */
+type FolderPatch = <A extends { meta: { folder?: string } }>(args: A) => A;
+
+/** Rewrite a pending payload's folder name after a folder rename. */
+const renameFolderPatch =
+  (oldName: string, newName: string): FolderPatch =>
+  (args) =>
+    args.meta.folder === oldName
+      ? { ...args, meta: { ...args.meta, folder: newName } }
+      : args;
+
+/** Clear a pending payload's folder name after a folder deletion. */
+const clearFolderPatch: FolderPatch = (args) => ({
+  ...args,
+  meta: { ...args.meta, folder: undefined },
+});
+
+/**
+ * A folder registry change touched these children (rename/delete): advance
+ * the session revision cache and rewrite any waiting debounced payload so
+ * it cannot resurrect the old folder name after the operation.
+ */
+function applyFolderChildren(
+  children: { kind: EntityKind; id: string; rev: number }[],
+  savers: {
+    text: DomainSaver<TextSaveArgs>;
+    thread: DomainSaver<ThreadSaveArgs>;
+  },
+  patch: FolderPatch,
+): void {
+  for (const child of children) {
+    revs.set(entityKey(child.kind, child.id), child.rev);
+    if (child.kind === "text") {
+      savers.text.refresh(child.id, patch, child.rev);
+    } else if (child.kind === "thread") {
+      savers.thread.refresh(child.id, patch, child.rev);
+    }
+  }
 }
 
 /**
@@ -1576,6 +1651,53 @@ function createSqliteRepository(): Repository {
         invoke<number>("db_thread_set_folder", { id, folder, updatedAt }),
       );
       revs.set(key, newRev);
+    },
+
+    // Navigator folders (schema v16)
+    foldersList: () =>
+      track(
+        invoke<FolderRowWire[]>("db_folders_list").then((rows) =>
+          rows.map(folderFromWire),
+        ),
+      ),
+    folderCreate: (folder) =>
+      track(
+        invoke<FolderRowWire>("db_folder_create", { folder }).then(folderFromWire),
+      ),
+    folderRename: async (scope, oldName, newName, updatedAt) => {
+      // Flush both pending saver queues first: the rename touches every
+      // item of the scope, and a queued payload must not overwrite it.
+      await Promise.all([textSaver.flush(), threadSaver.flush()]);
+      const children = await track(
+        invoke<AffectedChildWire[]>("db_folder_rename", {
+          scope,
+          oldName,
+          newName,
+          updatedAt,
+        }),
+      );
+      applyFolderChildren(
+        (children ?? []).filter(
+          (child): child is AffectedChildWire =>
+            child.kind === "text" || child.kind === "thread",
+        ),
+        { text: textSaver, thread: threadSaver },
+        renameFolderPatch(oldName, newName),
+      );
+    },
+    folderDelete: async (scope, name) => {
+      await Promise.all([textSaver.flush(), threadSaver.flush()]);
+      const children = await track(
+        invoke<AffectedChildWire[]>("db_folder_delete", { scope, name }),
+      );
+      applyFolderChildren(
+        (children ?? []).filter(
+          (child): child is AffectedChildWire =>
+            child.kind === "text" || child.kind === "thread",
+        ),
+        { text: textSaver, thread: threadSaver },
+        clearFolderPatch,
+      );
     },
     threadDelete: (id) => {
       threadSaver.cancel(id);
@@ -2106,6 +2228,7 @@ function createJsonRepository(): Repository {
     const threads = (await loadJson<ThreadMeta[]>("threads.json")) ?? [];
     const sources = (await loadJson<SourceMeta[]>("sources.json")) ?? [];
     const proposals = (await loadJson<DocumentProposal[]>("proposals.json")) ?? [];
+    const folders = (await loadJson<FolderMeta[]>("folders.json")) ?? [];
 
     // The canonical dump row shapes ARE the wire shapes: reuse the same
     // converters the production read/write paths use, so a field added to
@@ -2139,6 +2262,7 @@ function createJsonRepository(): Repository {
       threads: threads.map((t) => threadMetaToWire(t, revOf(revMap, "thread", t.id))),
       threadBriefs: [],
       messages: [],
+      folders: folders.map((f) => ({ ...f })),
     };
 
     for (const text of texts) {
@@ -2230,6 +2354,10 @@ function createJsonRepository(): Repository {
       data: dump.threads.map(threadMetaFromWire),
     });
     files.push({ path: "sources.json", data: dump.sources.map(sourceFromWire) });
+    files.push({
+      path: "folders.json",
+      data: dump.folders.map((f) => ({ ...f })),
+    });
     files.push({
       path: "proposals.json",
       data: dump.proposals.map((p) => ({
@@ -2671,13 +2799,19 @@ function createJsonRepository(): Repository {
           const texts = (await loadJson<LibraryTextMeta[]>("library.json")) ?? [];
           const threads = (await loadJson<ThreadMeta[]>("threads.json")) ?? [];
           const sources = (await loadJson<SourceMeta[]>("sources.json")) ?? [];
+          const folders = (await loadJson<FolderMeta[]>("folders.json")) ?? [];
           const revMap = await readRevs();
           // B21c: the relationship change ADVANCES each child's revision
           // (it is a metadata change), so a stale client cannot save on
-          // top of the pre-deletion association.
-          const unlink = <T extends { id: string; projectId?: string | null }>(
+          // top of the pre-deletion association. The project's folders
+          // belonged to it: its texts/conversations lose the folder name
+          // (the folder rows for this scope are removed below).
+          const unlink = <
+            T extends { id: string; projectId?: string | null; folder?: string },
+          >(
             rows: T[],
             kind: EntityKind,
+            clearFolder: boolean,
           ): T[] =>
             rows.map((row) => {
               if (row.projectId !== id) return row;
@@ -2686,11 +2820,15 @@ function createJsonRepository(): Repository {
               delete revMap[row.id];
               revMap[canonical] = rev;
               unlinked.push({ kind, id: row.id, rev });
-              return { ...row, projectId: undefined };
+              return {
+                ...row,
+                projectId: undefined,
+                ...(clearFolder ? { folder: undefined } : {}),
+              };
             });
-          const nextTexts = unlink(texts, "text");
-          const nextThreads = unlink(threads, "thread");
-          const nextSources = unlink(sources, "source");
+          const nextTexts = unlink(texts, "text", true);
+          const nextThreads = unlink(threads, "thread", true);
+          const nextSources = unlink(sources, "source", false);
           delete revMap[key];
           // B21c: registry files, the child unlinks, and the revisions
           // commit as ONE transaction (the same envelope as the saves).
@@ -2703,6 +2841,10 @@ function createJsonRepository(): Repository {
               { path: "library.json", data: nextTexts },
               { path: "threads.json", data: nextThreads },
               { path: "sources.json", data: nextSources },
+              {
+                path: "folders.json",
+                data: folders.filter((f) => f.scope !== id),
+              },
               { path: revisionsFile(), data: revMap },
             ],
             [briefFile(id)],
@@ -3070,6 +3212,118 @@ function createJsonRepository(): Repository {
         },
       );
       revs.set(entityKey("thread", id), newRev);
+    },
+
+    // Navigator folders (schema v16) — browser fallback backend.
+    async foldersList() {
+      await replayPendingCommit();
+      return (await loadJson<FolderMeta[]>("folders.json")) ?? [];
+    },
+    async folderCreate(folder) {
+      let result = folder;
+      await enqueueRegistry(async () => {
+        const folders = (await loadJson<FolderMeta[]>("folders.json")) ?? [];
+        const name = folder.name.trim();
+        const existing = folders.find(
+          (f) => f.scope === folder.scope && f.name === name,
+        );
+        if (existing) {
+          result = existing;
+          return;
+        }
+        const row = { ...folder, name };
+        await commitFiles([{ path: "folders.json", data: [...folders, row] }]);
+        result = row;
+      });
+      return result;
+    },
+    async folderRename(scope, oldName, newName, updatedAt) {
+      await Promise.all([textSaver.flush(), threadSaver.flush()]);
+      const affected: { kind: EntityKind; id: string; rev: number }[] = [];
+      await enqueueRegistry(async () => {
+        const folders = (await loadJson<FolderMeta[]>("folders.json")) ?? [];
+        const texts = (await loadJson<LibraryTextMeta[]>("library.json")) ?? [];
+        const threads = (await loadJson<ThreadMeta[]>("threads.json")) ?? [];
+        const revMap = await readRevs();
+        const renameIn = <
+          T extends { id: string; projectId?: string | null; folder?: string },
+        >(
+          rows: T[],
+          kind: EntityKind,
+        ): T[] =>
+          rows.map((row) => {
+            if ((row.projectId ?? "") !== scope || row.folder !== oldName) {
+              return row;
+            }
+            const rev = revOf(revMap, kind, row.id) + 1;
+            delete revMap[row.id];
+            revMap[entityKey(kind, row.id)] = rev;
+            affected.push({ kind, id: row.id, rev });
+            return { ...row, folder: newName };
+          });
+        const nextTexts = renameIn(texts, "text");
+        const nextThreads = renameIn(threads, "thread");
+        await commitFiles([
+          { path: "library.json", data: nextTexts },
+          { path: "threads.json", data: nextThreads },
+          {
+            path: "folders.json",
+            data: folders.map((f) =>
+              f.scope === scope && f.name === oldName
+                ? { ...f, name: newName, updatedAt }
+                : f,
+            ),
+          },
+          { path: revisionsFile(), data: revMap },
+        ]);
+      });
+      applyFolderChildren(
+        affected,
+        { text: textSaver, thread: threadSaver },
+        renameFolderPatch(oldName, newName),
+      );
+    },
+    async folderDelete(scope, name) {
+      await Promise.all([textSaver.flush(), threadSaver.flush()]);
+      const affected: { kind: EntityKind; id: string; rev: number }[] = [];
+      await enqueueRegistry(async () => {
+        const folders = (await loadJson<FolderMeta[]>("folders.json")) ?? [];
+        const texts = (await loadJson<LibraryTextMeta[]>("library.json")) ?? [];
+        const threads = (await loadJson<ThreadMeta[]>("threads.json")) ?? [];
+        const revMap = await readRevs();
+        const clearIn = <
+          T extends { id: string; projectId?: string | null; folder?: string },
+        >(
+          rows: T[],
+          kind: EntityKind,
+        ): T[] =>
+          rows.map((row) => {
+            if ((row.projectId ?? "") !== scope || row.folder !== name) {
+              return row;
+            }
+            const rev = revOf(revMap, kind, row.id) + 1;
+            delete revMap[row.id];
+            revMap[entityKey(kind, row.id)] = rev;
+            affected.push({ kind, id: row.id, rev });
+            return { ...row, folder: undefined };
+          });
+        const nextTexts = clearIn(texts, "text");
+        const nextThreads = clearIn(threads, "thread");
+        await commitFiles([
+          { path: "library.json", data: nextTexts },
+          { path: "threads.json", data: nextThreads },
+          {
+            path: "folders.json",
+            data: folders.filter((f) => !(f.scope === scope && f.name === name)),
+          },
+          { path: revisionsFile(), data: revMap },
+        ]);
+      });
+      applyFolderChildren(
+        affected,
+        { text: textSaver, thread: threadSaver },
+        clearFolderPatch,
+      );
     },
     async threadReplaceMessage(id, messageId, content, incomplete, updatedAt) {
       await threadSaver.flush();

@@ -182,6 +182,18 @@ pub struct ThreadRow {
     pub updated_at: String,
 }
 
+/// A navigator folder (schema v16). `scope` is "" for the standalone area
+/// or a project id; membership lives in the items' `folder` name column.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderRow {
+    pub id: String,
+    pub scope: String,
+    pub name: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageRow {
@@ -238,6 +250,9 @@ pub struct DbDump {
     pub thread_briefs: Vec<ThreadBriefRow>,
     #[serde(default)]
     pub messages: Vec<StoredMessageRow>,
+    /// Navigator folder registry (schema v16); legacy dumps default empty.
+    #[serde(default)]
+    pub folders: Vec<FolderRow>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -556,8 +571,13 @@ CREATE TABLE IF NOT EXISTS messages (
 
 /// Schema the current build supports. Databases created by a NEWER version
 /// are refused rather than misread.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 15;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 16;
 
+/// v16: navigator folders. A folder registry per scope (standalone = "",
+/// project = project id) so empty folders can be created and persist;
+/// membership stays the `folder` name column on texts and threads.
+/// Applied by `migrate_v16` (table-guarded, repairable).
+///
 /// v15: conversation folders. A thread carries an optional one-level
 /// folder name for organizing the navigator (texts already have one).
 /// Applied by `migrate_v15` (column-guarded).
@@ -945,6 +965,22 @@ fn migrate_v15(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// v16, REPAIRABLE: the folder registry (idempotent CREATE IF NOT EXISTS).
+fn migrate_v16(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS folders (
+           id TEXT PRIMARY KEY,
+           scope TEXT NOT NULL,
+           name TEXT NOT NULL,
+           created_at TEXT NOT NULL,
+           updated_at TEXT NOT NULL,
+           UNIQUE(scope, name)
+         );",
+    )
+    .map_err(|e| format!("Failed to create the folder registry: {e}"))?;
+    Ok(())
+}
+
 /// v13, REPAIRABLE: every bibliography metadata column is added only when
 /// missing, so a crash mid-migration leaves a re-runnable database.
 fn migrate_v13(conn: &Connection) -> Result<(), String> {
@@ -1005,6 +1041,7 @@ fn ensure_schema(conn: &Connection) -> Result<(), String> {
     apply_migration(conn, 13, migrate_v13)?;
     apply_migration(conn, 14, migrate_v14)?;
     apply_migration(conn, 15, migrate_v15)?;
+    apply_migration(conn, 16, migrate_v16)?;
     Ok(())
 }
 
@@ -2115,12 +2152,18 @@ pub struct AffectedChildRow {
 /// domain operation: its texts, conversations, and sources survive as
 /// standalone rows (project_id NULL); nothing dangling remains. Each
 /// unlinked child advances its revision — the relationship change is a
-/// metadata change, so stale clients cannot save on top of it. Returns
-/// the unlinked children with their new revisions.
+/// metadata change, so stale clients cannot save on top of it. The
+/// project's folders are removed and its texts/conversations lose their
+/// folder name (the folder belonged to the project). Returns the unlinked
+/// children with their new revisions.
 fn project_delete(conn: &Connection, id: &str) -> Result<Vec<AffectedChildRow>, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut affected: Vec<AffectedChildRow> = Vec::new();
-    for (kind, table) in [("text", "texts"), ("thread", "threads"), ("source", "sources")] {
+    for (kind, table, clear_folder) in [
+        ("text", "texts", true),
+        ("thread", "threads", true),
+        ("source", "sources", false),
+    ] {
         let children: Vec<(String, i64)> = {
             let mut stmt = tx
                 .prepare(&format!(
@@ -2135,9 +2178,11 @@ fn project_delete(conn: &Connection, id: &str) -> Result<Vec<AffectedChildRow>, 
         if children.is_empty() {
             continue;
         }
+        let folder_clause = if clear_folder { ", folder = NULL" } else { "" };
         tx.execute(
             &format!(
-                "UPDATE {table} SET project_id = NULL, rev = rev + 1 WHERE project_id = ?1"
+                "UPDATE {table} SET project_id = NULL{folder_clause}, rev = rev + 1
+                 WHERE project_id = ?1"
             ),
             params![id],
         )
@@ -2150,6 +2195,8 @@ fn project_delete(conn: &Connection, id: &str) -> Result<Vec<AffectedChildRow>, 
             });
         }
     }
+    tx.execute("DELETE FROM folders WHERE scope = ?1", params![id])
+        .map_err(|e| e.to_string())?;
     tx.execute(
         "DELETE FROM project_briefs WHERE project_id = ?1",
         params![id],
@@ -2508,6 +2555,202 @@ fn thread_set_folder(
     Ok(new_rev)
 }
 
+// ──────────────────────────────────────────────
+// Navigator folder registry (schema v16)
+// ──────────────────────────────────────────────
+
+fn row_to_folder(r: &rusqlite::Row) -> rusqlite::Result<FolderRow> {
+    Ok(FolderRow {
+        id: r.get("id")?,
+        scope: r.get("scope")?,
+        name: r.get("name")?,
+        created_at: r.get("created_at")?,
+        updated_at: r.get("updated_at")?,
+    })
+}
+
+fn folders_list(conn: &Connection) -> Result<Vec<FolderRow>, String> {
+    let mut stmt = conn
+        .prepare("SELECT * FROM folders ORDER BY scope, name COLLATE NOCASE, id")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], row_to_folder)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+/// Create a folder. Identity is (scope, name): creating an existing folder
+/// returns the current row instead of failing (idempotent).
+fn folder_create(conn: &Connection, folder: &FolderRow) -> Result<FolderRow, String> {
+    let name = folder.name.trim();
+    if name.is_empty() {
+        return Err("A folder name is required.".to_string());
+    }
+    let existing = conn
+        .query_row(
+            "SELECT * FROM folders WHERE scope = ?1 AND name = ?2",
+            params![folder.scope, name],
+            row_to_folder,
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if let Some(existing) = existing {
+        return Ok(existing);
+    }
+    conn.execute(
+        "INSERT INTO folders (id, scope, name, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            folder.id,
+            folder.scope,
+            name,
+            folder.created_at,
+            folder.updated_at
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(FolderRow {
+        id: folder.id.clone(),
+        scope: folder.scope.clone(),
+        name: name.to_string(),
+        created_at: folder.created_at.clone(),
+        updated_at: folder.updated_at.clone(),
+    })
+}
+
+/// Rename a folder: update the registry row (when present) and every text
+/// and thread of its scope carrying the old name, in one transaction.
+/// Items advance their revision (session caches stay valid) but keep their
+/// `updated_at`: a rename is organizational, not a recency change.
+/// Returns the affected children.
+fn folder_rename(
+    conn: &Connection,
+    scope: &str,
+    old_name: &str,
+    new_name: &str,
+    updated_at: &str,
+) -> Result<Vec<AffectedChildRow>, String> {
+    let old = old_name.trim();
+    let new = new_name.trim();
+    if new.is_empty() {
+        return Err("A folder name is required.".to_string());
+    }
+    if old == new {
+        return Ok(Vec::new());
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let collision: Option<String> = tx
+        .query_row(
+            "SELECT id FROM folders WHERE scope = ?1 AND name = ?2",
+            params![scope, new],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if collision.is_some() {
+        return Err(format!("A folder named “{new}” already exists here."));
+    }
+    tx.execute(
+        "UPDATE folders SET name = ?3, updated_at = ?4 WHERE scope = ?1 AND name = ?2",
+        params![scope, old, new, updated_at],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut affected = Vec::new();
+    for (kind, table) in [("text", "texts"), ("thread", "threads")] {
+        let children: Vec<(String, i64)> = {
+            let mut stmt = tx
+                .prepare(&format!(
+                    "SELECT id, rev FROM {table}
+                     WHERE COALESCE(project_id, '') = ?1 AND folder = ?2"
+                ))
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![scope, old], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        if children.is_empty() {
+            continue;
+        }
+        tx.execute(
+            &format!(
+                "UPDATE {table} SET folder = ?3, rev = rev + 1
+                 WHERE COALESCE(project_id, '') = ?1 AND folder = ?2"
+            ),
+            params![scope, old, new],
+        )
+        .map_err(|e| e.to_string())?;
+        for (child_id, rev) in children {
+            affected.push(AffectedChildRow {
+                kind: kind.to_string(),
+                id: child_id,
+                rev: rev + 1,
+            });
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(affected)
+}
+
+/// Delete a folder: clear the name on every text and thread of its scope
+/// (archived included), so its contents move OUT of the folder — nothing
+/// is deleted. The registry row (when present) is removed. Items advance
+/// their revision but keep `updated_at` (organizational change).
+fn folder_delete(
+    conn: &Connection,
+    scope: &str,
+    name: &str,
+) -> Result<Vec<AffectedChildRow>, String> {
+    let trimmed = name.trim();
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM folders WHERE scope = ?1 AND name = ?2",
+        params![scope, trimmed],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut affected = Vec::new();
+    for (kind, table) in [("text", "texts"), ("thread", "threads")] {
+        let children: Vec<(String, i64)> = {
+            let mut stmt = tx
+                .prepare(&format!(
+                    "SELECT id, rev FROM {table}
+                     WHERE COALESCE(project_id, '') = ?1 AND folder = ?2"
+                ))
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![scope, trimmed], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        if children.is_empty() {
+            continue;
+        }
+        tx.execute(
+            &format!(
+                "UPDATE {table} SET folder = NULL, rev = rev + 1
+                 WHERE COALESCE(project_id, '') = ?1 AND folder = ?2"
+            ),
+            params![scope, trimmed],
+        )
+        .map_err(|e| e.to_string())?;
+        for (child_id, rev) in children {
+            affected.push(AffectedChildRow {
+                kind: kind.to_string(),
+                id: child_id,
+                rev: rev + 1,
+            });
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(affected)
+}
+
 /// Navigator organization (D3): set archived/pinned on a TEXT. Update-only,
 /// revision-checked like every metadata write; unmentioned fields keep
 /// their values. Returns the new revision.
@@ -2593,6 +2836,7 @@ fn export_dump(conn: &Connection) -> Result<DbDump, String> {
         let texts = texts_list(conn)?;
         let projects = projects_list(conn)?;
         let threads = threads_list(conn)?;
+        let folders = folders_list(conn)?;
 
         let mut text_contents = Vec::new();
         let mut stmt = conn
@@ -2742,6 +2986,7 @@ fn export_dump(conn: &Connection) -> Result<DbDump, String> {
             threads,
             thread_briefs,
             messages,
+            folders,
         })
     })();
     conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
@@ -2760,6 +3005,7 @@ fn clear_domain_tables(conn: &Connection) -> Result<(), String> {
          DELETE FROM text_contents;
          DELETE FROM texts;
          DELETE FROM project_briefs;
+         DELETE FROM folders;
          DELETE FROM projects;",
     )
     .map_err(|e| e.to_string())?;
@@ -2866,6 +3112,17 @@ fn apply_dump(tx: &Connection, dump: &DbDump) -> Result<(), String> {
     }
     for p in &dump.projects {
         project_insert(tx, p)?;
+    }
+    // Folder registry rows (schema v16). Scope validity ("" or a known
+    // project) and name uniqueness are enforced by the frontend parser
+    // before the restore; a duplicate here aborts the transaction.
+    for f in &dump.folders {
+        tx.execute(
+            "INSERT INTO folders (id, scope, name, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![f.id, f.scope, f.name, f.created_at, f.updated_at],
+        )
+        .map_err(|e| e.to_string())?;
     }
     for b in &dump.project_briefs {
         tx.execute(
@@ -4082,6 +4339,40 @@ pub fn db_thread_set_folder(
     with_conn(&db, |conn| {
         thread_set_folder(conn, &id, folder.as_deref(), &updated_at)
     })
+}
+
+// ── Navigator folders (schema v16) ──
+
+#[tauri::command]
+pub fn db_folders_list(db: State<Db>) -> Result<Vec<FolderRow>, String> {
+    with_conn(&db, folders_list)
+}
+
+#[tauri::command]
+pub fn db_folder_create(db: State<Db>, folder: FolderRow) -> Result<FolderRow, String> {
+    with_conn(&db, |conn| folder_create(conn, &folder))
+}
+
+#[tauri::command]
+pub fn db_folder_rename(
+    db: State<Db>,
+    scope: String,
+    old_name: String,
+    new_name: String,
+    updated_at: String,
+) -> Result<Vec<AffectedChildRow>, String> {
+    with_conn(&db, |conn| {
+        folder_rename(conn, &scope, &old_name, &new_name, &updated_at)
+    })
+}
+
+#[tauri::command]
+pub fn db_folder_delete(
+    db: State<Db>,
+    scope: String,
+    name: String,
+) -> Result<Vec<AffectedChildRow>, String> {
+    with_conn(&db, |conn| folder_delete(conn, &scope, &name))
 }
 
 #[tauri::command]
@@ -5410,6 +5701,22 @@ mod tests {
         assert_eq!(row.snippet, None);
     }
 
+    #[test]
+    fn contract_folder_meta_fixtures_deserialize() {
+        let row: FolderRow = serde_json::from_value(fixture("folderMeta")).unwrap();
+        assert_eq!(row.scope, "");
+        assert_eq!(row.name, "Essays");
+        let project: FolderRow = serde_json::from_value(fixture("folderMetaProject")).unwrap();
+        assert_eq!(project.scope, "p-1");
+        assert_eq!(project.name, "Drafts");
+        // Round-trips under the same camelCase wire names.
+        let back = serde_json::to_value(&project).unwrap();
+        assert_eq!(
+            back.get("createdAt").and_then(|v| v.as_str()),
+            Some("2026-01-01T00:00:00.000Z")
+        );
+    }
+
     /// References survive create → read → export → import on both rows.
     #[test]
     fn references_survive_create_read_export_import() {
@@ -6134,6 +6441,144 @@ mod tests {
         );
     }
 
+    fn folder(id: &str, scope: &str, name: &str) -> FolderRow {
+        FolderRow {
+            id: id.into(),
+            scope: scope.into(),
+            name: name.into(),
+            created_at: "c".into(),
+            updated_at: "u".into(),
+        }
+    }
+
+    #[test]
+    fn v16_folder_registry_is_created_and_repairable() {
+        let conn = mem();
+        assert!(table_exists(&conn, "folders").unwrap());
+        // Dropping the table and replaying the step rebuilds it.
+        conn.execute_batch("DROP TABLE folders;").unwrap();
+        conn.pragma_update(None, "user_version", 15).unwrap();
+        ensure_schema(&conn).unwrap();
+        assert!(table_exists(&conn, "folders").unwrap());
+        migrate_v16(&conn).unwrap(); // idempotent
+    }
+
+    #[test]
+    fn folder_create_is_idempotent_and_validated() {
+        let conn = mem();
+        let created = folder_create(&conn, &folder("f1", "", "  Research  ")).unwrap();
+        assert_eq!(created.name, "Research");
+        assert_eq!(created.scope, "");
+        // A second create of the same scope+name returns the existing row
+        // (the frontend may retry or double-click).
+        let again = folder_create(&conn, &folder("f2", "", "Research")).unwrap();
+        assert_eq!(again.id, "f1");
+        assert_eq!(folders_list(&conn).unwrap().len(), 1);
+        // The same name in another scope is its own folder.
+        folder_create(&conn, &folder("f3", "p-1", "Research")).unwrap();
+        assert_eq!(folders_list(&conn).unwrap().len(), 2);
+        // Empty/whitespace names are refused.
+        assert!(folder_create(&conn, &folder("f4", "", "   ")).is_err());
+    }
+
+    #[test]
+    fn folder_rename_moves_items_in_scope_only() {
+        let conn = mem();
+        project_insert(&conn, &proj("p-1")).unwrap();
+        thread_create(&conn, &thread("t1"), None, &[]).unwrap();
+        let mut p1 = thread("t2");
+        p1.project_id = Some("p-1".into());
+        thread_create(&conn, &p1, None, &[]).unwrap();
+        thread_create(&conn, &thread("t3"), None, &[]).unwrap();
+        thread_set_folder(&conn, "t1", Some("Notes"), "u1").unwrap();
+        thread_set_folder(&conn, "t2", Some("Notes"), "u1").unwrap();
+        thread_set_folder(&conn, "t3", Some("Keep"), "u1").unwrap();
+
+        let affected = folder_rename(&conn, "", "Notes", "Archive", "u2").unwrap();
+        // Only the standalone item moved; the project one was out of scope.
+        assert_eq!(affected.len(), 1);
+        assert_eq!(affected[0].kind, "thread");
+        assert_eq!(affected[0].id, "t1");
+        let by_id = |id: &str| {
+            threads_list(&conn)
+                .unwrap()
+                .into_iter()
+                .find(|t| t.id == id)
+                .unwrap()
+        };
+        assert_eq!(by_id("t1").folder.as_deref(), Some("Archive"));
+        assert_eq!(by_id("t2").folder.as_deref(), Some("Notes"));
+        assert_eq!(by_id("t3").folder.as_deref(), Some("Keep"));
+        // The item revision advanced; its recency (updated_at) did not.
+        assert_eq!(by_id("t1").updated_at, "u1");
+
+        // Collisions with an existing folder name are refused.
+        folder_create(&conn, &folder("f9", "", "Taken")).unwrap();
+        assert!(folder_rename(&conn, "", "Archive", "Taken", "u3").is_err());
+    }
+
+    #[test]
+    fn folder_delete_moves_contents_out_of_the_folder() {
+        let conn = mem();
+        thread_create(&conn, &thread("t1"), None, &[]).unwrap();
+        let mut archived = thread("t2");
+        archived.archived = true;
+        thread_create(&conn, &archived, None, &[]).unwrap();
+        thread_set_folder(&conn, "t1", Some("Notes"), "u1").unwrap();
+        thread_set_folder(&conn, "t2", Some("Notes"), "u1").unwrap();
+        create_text(&conn, &meta("a"), "body").unwrap();
+        let mut tm = texts_list(&conn).unwrap().remove(0);
+        tm.folder = Some("Notes".into());
+        text_save(&conn, "a", &tm, None, Some(tm.rev)).unwrap();
+        folder_create(&conn, &folder("f1", "", "Notes")).unwrap();
+
+        let affected = folder_delete(&conn, "", "Notes").unwrap();
+        // Both texts and threads were cleared, archived included.
+        assert_eq!(affected.len(), 3);
+        assert!(folders_list(&conn).unwrap().is_empty());
+        let threads = threads_list(&conn).unwrap();
+        assert!(threads.iter().all(|t| t.folder.is_none()));
+        assert!(texts_list(&conn).unwrap()[0].folder.is_none());
+    }
+
+    #[test]
+    fn project_delete_clears_project_folders_and_child_folder_names() {
+        let conn = mem();
+        project_insert(&conn, &proj("p-1")).unwrap();
+        let mut t = thread("t1");
+        t.project_id = Some("p-1".into());
+        thread_create(&conn, &t, None, &[]).unwrap();
+        thread_set_folder(&conn, "t1", Some("Drafts"), "u1").unwrap();
+        folder_create(&conn, &folder("f1", "p-1", "Drafts")).unwrap();
+        folder_create(&conn, &folder("f2", "", "Standalone")).unwrap();
+
+        project_delete(&conn, "p-1").unwrap();
+
+        // The project's folder rows are gone; the unlinked thread lost its
+        // folder name; standalone folders are untouched.
+        let folders = folders_list(&conn).unwrap();
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].id, "f2");
+        let threads = threads_list(&conn).unwrap();
+        assert!(threads[0].project_id.is_none());
+        assert!(threads[0].folder.is_none());
+    }
+
+    #[test]
+    fn folders_roundtrip_through_dump_and_import() {
+        let conn = mem();
+        folder_create(&conn, &folder("f1", "", "Essays")).unwrap();
+        folder_create(&conn, &folder("f2", "p-1", "Research")).unwrap();
+        let dump = export_dump(&conn).unwrap();
+        assert_eq!(dump.folders.len(), 2);
+
+        let conn2 = mem();
+        let tx = conn2.unchecked_transaction().unwrap();
+        apply_dump(&tx, &dump).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(folders_list(&conn2).unwrap().len(), 2);
+    }
+
     #[test]
     fn named_snapshots_capture_the_current_body_and_keep_labels() {
         let conn = mem();
@@ -6691,6 +7136,22 @@ mod tests {
                         incomplete: None,
                         attachments_json: None,
                     },
+                },
+            ],
+            folders: vec![
+                FolderRow {
+                    id: "fold-1".into(),
+                    scope: "".into(),
+                    name: "Essays".into(),
+                    created_at: "2026-01-07T00:00:00.000Z".into(),
+                    updated_at: "2026-01-07T00:00:00.000Z".into(),
+                },
+                FolderRow {
+                    id: "fold-2".into(),
+                    scope: "p-1".into(),
+                    name: "Drafts".into(),
+                    created_at: "2026-01-08T00:00:00.000Z".into(),
+                    updated_at: "2026-01-08T00:00:00.000Z".into(),
                 },
             ],
         }

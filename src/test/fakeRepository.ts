@@ -1,5 +1,6 @@
 import type { Repository, StoredMessage, TextRestoreResult } from "@/utils/repository";
 import type {
+  FolderMeta,
   LibraryTextMeta,
   ProjectMeta,
   TextVersion,
@@ -48,6 +49,8 @@ export interface FakeRepoState {
   projects: Map<string, FakeProjectEntry>;
   threads: Map<string, FakeThreadEntry>;
   sources: Map<string, FakeSourceEntry>;
+  /** Navigator folder registry (schema v16), keyed by folder id. */
+  folders: Map<string, FolderMeta>;
   /** Set to make the next repository call fail (error-path tests). */
   nextError: Error | null;
 }
@@ -57,6 +60,7 @@ export const fakeRepoState: FakeRepoState = {
   projects: new Map(),
   threads: new Map(),
   sources: new Map(),
+  folders: new Map(),
   nextError: null,
 };
 
@@ -81,6 +85,7 @@ export function resetFakeRepository(): void {
   fakeRepoState.projects.clear();
   fakeRepoState.threads.clear();
   fakeRepoState.sources.clear();
+  fakeRepoState.folders.clear();
   fakeProposals.length = 0;
   fakeRepoState.nextError = null;
 }
@@ -333,16 +338,23 @@ export const fakeRepository: Repository = {
   },
   async projectDelete(id) {
     await maybeFail();
-    // One domain operation: unlink texts + conversations, remove brief.
+    // One domain operation: unlink texts + conversations (clearing the
+    // project's folder names, which belonged to the project), remove the
+    // project's folder rows and the brief.
     for (const entry of fakeRepoState.texts.values()) {
       if (entry.meta.projectId === id) {
-        entry.meta = { ...entry.meta, projectId: undefined };
+        entry.meta = { ...entry.meta, projectId: undefined, folder: undefined };
+        entry.rev += 1;
       }
     }
     for (const entry of fakeRepoState.threads.values()) {
       if (entry.meta.projectId === id) {
-        entry.meta = { ...entry.meta, projectId: undefined };
+        entry.meta = { ...entry.meta, projectId: undefined, folder: undefined };
+        entry.rev += 1;
       }
+    }
+    for (const [folderId, folder] of [...fakeRepoState.folders]) {
+      if (folder.scope === id) fakeRepoState.folders.delete(folderId);
     }
     fakeRepoState.projects.delete(id);
   },
@@ -521,6 +533,62 @@ export const fakeRepository: Repository = {
   async threadDelete(id) {
     await maybeFail();
     fakeRepoState.threads.delete(id);
+  },
+
+  // Navigator folders (schema v16)
+  async foldersList() {
+    await maybeFail();
+    return [...fakeRepoState.folders.values()].map((f) => ({ ...f }));
+  },
+  async folderCreate(folder) {
+    await maybeFail();
+    const name = folder.name.trim();
+    const existing = [...fakeRepoState.folders.values()].find(
+      (f) => f.scope === folder.scope && f.name === name,
+    );
+    if (existing) return { ...existing };
+    const row = { ...folder, name };
+    fakeRepoState.folders.set(row.id, row);
+    return { ...row };
+  },
+  async folderRename(scope, oldName, newName, updatedAt) {
+    await maybeFail();
+    for (const f of fakeRepoState.folders.values()) {
+      if (f.scope === scope && f.name === oldName) {
+        f.name = newName;
+        f.updatedAt = updatedAt;
+      }
+    }
+    for (const entry of fakeRepoState.texts.values()) {
+      if ((entry.meta.projectId ?? "") === scope && entry.meta.folder === oldName) {
+        entry.meta = { ...entry.meta, folder: newName };
+        entry.rev += 1;
+      }
+    }
+    for (const entry of fakeRepoState.threads.values()) {
+      if ((entry.meta.projectId ?? "") === scope && entry.meta.folder === oldName) {
+        entry.meta = { ...entry.meta, folder: newName };
+        entry.rev += 1;
+      }
+    }
+  },
+  async folderDelete(scope, name) {
+    await maybeFail();
+    for (const [id, f] of [...fakeRepoState.folders]) {
+      if (f.scope === scope && f.name === name) fakeRepoState.folders.delete(id);
+    }
+    for (const entry of fakeRepoState.texts.values()) {
+      if ((entry.meta.projectId ?? "") === scope && entry.meta.folder === name) {
+        entry.meta = { ...entry.meta, folder: undefined };
+        entry.rev += 1;
+      }
+    }
+    for (const entry of fakeRepoState.threads.values()) {
+      if ((entry.meta.projectId ?? "") === scope && entry.meta.folder === name) {
+        entry.meta = { ...entry.meta, folder: undefined };
+        entry.rev += 1;
+      }
+    }
   },
 
   saveFailures: () => [],
