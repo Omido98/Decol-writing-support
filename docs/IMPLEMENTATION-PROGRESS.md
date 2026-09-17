@@ -1,32 +1,32 @@
 ﻿# Implementation Progress
 
-Working branch: `repair-r1-r11` (Phase 1â€“2 repair, batches R1 â†’ R11, then Phase 3+).
+Completed work log: Phase 1–2 repair (R1–R11), phases 3–5, deferred notes (D1–D5), the B01–B22 repair programme, and the F01–F13 follow-up programme. Nothing below is pending work; current state and verification checklist: `docs/PROJECT-STATE.md`.
 Verification commands: `npx tsc --noEmit`, `npm test`, `npm run build`, `cargo test --lib` / `cargo check` (from `src-tauri`).
 
 ## Completed batches
 
-### R1 â€” Fix the frontend/Rust data contract
+### R1 — Fix the frontend/Rust data contract
 
 Completed: 2026-09-15.
 
 Files changed:
-- `src/types/index.ts` â€” `ThreadMeta.mode` is now required (`ThreadMode`); legacy rows are normalized to `"text"` on read by the backends.
-- `src/utils/repository.ts` â€” explicit wire types (`TextMetaWire`, `ProjectMetaWire`, `ThreadMetaWire`) and converters (`*ToWire` / `*FromWire`) at the SQLite boundary. `null` wire fields normalize to absent domain fields. Reference material uses the canonical wire name `references` (Rust keeps its internal `refs` column; legacy `refs` payloads stay readable). JSON backend normalizes legacy `threads.json` rows missing `mode`.
-- `src/stores/chatStore.ts` â€” `createThread()` sets `mode: "text"`; the synthesized fallback meta in `scheduleThreadSave` includes `mode: "text"`.
-- `src/test/repository-contract.json` â€” NEW shared JSON contract fixtures (consumed by frontend tests and Rust serde tests via `include_str!`).
-- `src/utils/__tests__/repository.test.ts` â€” new tests: exact contract payloads for thread/project/text create+update paths; null normalization; metadata update preserves `references`; legacy JSON rows lacking `mode`.
-- `src/stores/__tests__/chatStore.test.ts` â€” `mode: "text"` added to meta literals (type requirement).
-- `src-tauri/src/repository.rs` â€” serde contract: `ThreadRow.mode` defaults to `"text"` for missing/null values; `refs` fields on `ThreadRow`/`ProjectRow` serialize as `references` and deserialize from both `references` and `refs`; `#[serde(default)]` on optional fields for tolerant legacy dumps. New tests: 5 fixture contract tests + `references_survive_create_read_export_import` + `legacy_v2_dump_with_refs_imports`.
+- `src/types/index.ts` — `ThreadMeta.mode` is now required (`ThreadMode`); legacy rows are normalized to `"text"` on read by the backends.
+- `src/utils/repository.ts` — explicit wire types (`TextMetaWire`, `ProjectMetaWire`, `ThreadMetaWire`) and converters (`*ToWire` / `*FromWire`) at the SQLite boundary. `null` wire fields normalize to absent domain fields. Reference material uses the canonical wire name `references` (Rust keeps its internal `refs` column; legacy `refs` payloads stay readable). JSON backend normalizes legacy `threads.json` rows missing `mode`.
+- `src/stores/chatStore.ts` — `createThread()` sets `mode: "text"`; the synthesized fallback meta in `scheduleThreadSave` includes `mode: "text"`.
+- `src/test/repository-contract.json` — NEW shared JSON contract fixtures (consumed by frontend tests and Rust serde tests via `include_str!`).
+- `src/utils/__tests__/repository.test.ts` — new tests: exact contract payloads for thread/project/text create+update paths; null normalization; metadata update preserves `references`; legacy JSON rows lacking `mode`.
+- `src/stores/__tests__/chatStore.test.ts` — `mode: "text"` added to meta literals (type requirement).
+- `src-tauri/src/repository.rs` — serde contract: `ThreadRow.mode` defaults to `"text"` for missing/null values; `refs` fields on `ThreadRow`/`ProjectRow` serialize as `references` and deserialize from both `references` and `refs`; `#[serde(default)]` on optional fields for tolerant legacy dumps. New tests: 5 fixture contract tests + `references_survive_create_read_export_import` + `legacy_v2_dump_with_refs_imports`.
 
 Commands run and results:
-- `npx tsc --noEmit` â€” OK (after fixing 3 new type errors introduced by the required `mode`).
-- `npm test` â€” 141 tests passed (13 files).
-- `cargo test --lib` â€” 28 tests passed (was 16, +12 repository contract/roundtrip coverage).
-- `cargo check` â€” OK.
+- `npx tsc --noEmit` — OK (after fixing 3 new type errors introduced by the required `mode`).
+- `npm test` — 141 tests passed (13 files).
+- `cargo test --lib` — 28 tests passed (was 16, +12 repository contract/roundtrip coverage).
+- `cargo check` — OK.
 
 Acceptance status (R1):
 - [x] Exact `createThread()` payload deserializes into Rust (fixture equality: frontend asserts invoke payload === fixture; Rust asserts fixture deserializes into `ThreadRow`).
-- [x] Project/conversation references survive create â†’ read â†’ update â†’ export â†’ import (Rust roundtrip test).
+- [x] Project/conversation references survive create → read → update → export → import (Rust roundtrip test).
 - [x] Metadata update does not clear references (Rust + frontend tests).
 - [x] Existing v2 dumps containing `refs` remain supported (serde alias + `legacy_v2_dump_with_refs_imports`).
 
@@ -34,40 +34,40 @@ Known limitations:
 - The Rust `refs` column name is unchanged internally; only the wire name changed. `DbDump` exports now contain `references`; old dumps with `refs` read via alias.
 - Frontend tests still mock the Tauri transport (no real IPC); real-adapter tests are R11 scope.
 
-### R2 â€” Make saves genuinely atomic and acknowledged
+### R2 — Make saves genuinely atomic and acknowledged
 
 Completed: 2026-09-15.
 
 Files changed:
-- `src/utils/repository.ts` â€” rewritten save discipline:
-  - Domain saves: `textSave(id, {meta, content?})`, `projectSave(id, {meta, brief?})`, `threadSave(id, {meta, briefJson, messages})` â€” each commits in ONE Rust transaction; debounced variants `textScheduleSave`/`projectScheduleSave`/`threadScheduleSave` coalesce per entity.
+- `src/utils/repository.ts` — rewritten save discipline:
+  - Domain saves: `textSave(id, {meta, content?})`, `projectSave(id, {meta, brief?})`, `threadSave(id, {meta, briefJson, messages})` — each commits in ONE Rust transaction; debounced variants `textScheduleSave`/`projectScheduleSave`/`threadScheduleSave` coalesce per entity.
   - Per-entity queues (`enqueue(entityKey, op)`): operations never invoke before entering the queue; deletes queue after in-flight writes so nothing resurrects.
   - Persisted revision counters + expected-revision checks: saves carry `expectedRev`; stale updates are rejected (`Stale revision: expected N, current M`), classified `stale` / `missing` / `error`.
   - Failure registry: failed scheduled saves retain their latest payload with `retry()`; `saveFailures()`, `retrySave(key)`, `subscribeSaveState()`, `resetSessionState()` exposed; timer-fired failures never become unhandled rejections.
   - Flushes (`flushTextSaves`/`flushProjectSaves`/`flushThreadSaves`) attempt all pending and reject on first failure while retaining payloads.
   - Wire rows now carry `rev`; the SQLite adapter maintains a revision cache fed by lists/get/save responses; JSON backend persists revisions in `revisions.json` and serializes ALL registry read-modify-write cycles through a global queue (concurrent mutations can no longer clobber registries).
   - Test seam: `setTransportInterceptor(fn)` for delayed/rejected-transport tests (thunks start only when the interceptor calls them).
-- `src/stores/libraryStore.ts` â€” `updateText` issues one domain save (metadata+content together; metadata-only saves are immediate and awaited); restore/reset paths clear the revision cache.
-- `src/stores/projectStore.ts` â€” `createProject` uses `projectCreate`; `updateProject` issues one domain save (metadata+brief together); reset path clears revision cache.
-- `src/stores/chatStore.ts` â€” `createThread` uses `threadCreate` (update-only saves afterwards); metadata updates (mode/references/title) ride the debounced whole-thread save instead of a separate upsert; `switchThread`/`createThread` tolerate failed flushes (retained for retry).
-- `src/App.tsx` â€” close drain uses `Promise.allSettled` so one failing domain drain cannot skip the others.
-- `src-tauri/src/repository.rs` â€” schema v2: `rev` columns on texts/projects/threads (column-existence-checked ALTER); databases newer than `SUPPORTED_SCHEMA_VERSION` are refused; `text_create`/`project_insert`/`thread_create` are INSERT-only (create â‰  update); `text_save`/`project_save`/`thread_save` are update-only, bump `rev`, accept `expected_rev` and reject stale writes inside the transaction; `thread_append_message` bumps `rev` so pre-append whole-thread saves are rejected; restore bumps `rev` and returns the new one; imports preserve row revisions.
-- `src-tauri/src/lib.rs` â€” command registrations updated (removed `db_text_update_meta`, `db_text_set_content`, `db_project_upsert`, `db_project_set_brief`, `db_thread_upsert`; added `db_text_save`, `db_project_create`, `db_project_save`, `db_thread_create`).
-- `src/test/fakeRepository.ts` â€” implements the new interface with create/update split, revision counters, update-only semantics.
+- `src/stores/libraryStore.ts` — `updateText` issues one domain save (metadata+content together; metadata-only saves are immediate and awaited); restore/reset paths clear the revision cache.
+- `src/stores/projectStore.ts` — `createProject` uses `projectCreate`; `updateProject` issues one domain save (metadata+brief together); reset path clears revision cache.
+- `src/stores/chatStore.ts` — `createThread` uses `threadCreate` (update-only saves afterwards); metadata updates (mode/references/title) ride the debounced whole-thread save instead of a separate upsert; `switchThread`/`createThread` tolerate failed flushes (retained for retry).
+- `src/App.tsx` — close drain uses `Promise.allSettled` so one failing domain drain cannot skip the others.
+- `src-tauri/src/repository.rs` — schema v2: `rev` columns on texts/projects/threads (column-existence-checked ALTER); databases newer than `SUPPORTED_SCHEMA_VERSION` are refused; `text_create`/`project_insert`/`thread_create` are INSERT-only (create ≠ update); `text_save`/`project_save`/`thread_save` are update-only, bump `rev`, accept `expected_rev` and reject stale writes inside the transaction; `thread_append_message` bumps `rev` so pre-append whole-thread saves are rejected; restore bumps `rev` and returns the new one; imports preserve row revisions.
+- `src-tauri/src/lib.rs` — command registrations updated (removed `db_text_update_meta`, `db_text_set_content`, `db_project_upsert`, `db_project_set_brief`, `db_thread_upsert`; added `db_text_save`, `db_project_create`, `db_project_save`, `db_thread_create`).
+- `src/test/fakeRepository.ts` — implements the new interface with create/update split, revision counters, update-only semantics.
 - Tests: `src/utils/__tests__/repository.test.ts` (rewritten + new R2 cases), store test fixtures gained `rev` fields, Rust tests rewritten for the new API + new stale/missing/duplicate/schema-version cases.
 
 Commands run and results:
-- `npx tsc --noEmit` â€” OK.
-- `npm test` â€” 146 tests passed (13 files).
-- `cargo test --lib` â€” 33 tests passed.
-- `cargo check` â€” OK.
-- `npm run build` â€” OK (chunk-size warning pre-exists).
+- `npx tsc --noEmit` — OK.
+- `npm test` — 146 tests passed (13 files).
+- `cargo test --lib` — 33 tests passed.
+- `cargo check` — OK.
+- `npm run build` — OK (chunk-size warning pre-exists).
 
 Acceptance status (R2):
 - [x] Successful Save followed immediately by reopening contains the saved content.
 - [x] Failed content persistence leaves no committed metadata describing unsaved content.
-- [x] Save â†’ append â†’ save cannot silently remove an appended reply (Rust + delayed-transport frontend tests).
-- [x] Save â†’ delete cannot resurrect the entity.
+- [x] Save → append → save cannot silently remove an appended reply (Rust + delayed-transport frontend tests).
+- [x] Save → delete cannot resurrect the entity.
 - [x] A failed timer write causes flush to fail visibly and retains a retryable payload.
 - [x] Concurrent JSON-backend mutations do not overwrite each other's registries.
 
@@ -75,7 +75,7 @@ Known limitations:
 - Retrying a stale thread save is "user wins": it overwrites the intermediate append (explicit choice; the UI for this lands with the R6 draft/session layer).
 - "Saved" UI indicators still pending (R6 wires acknowledged-state display; the repository now only resolves saves after commit).
 
-### R3 â€” Make revision history authoritative and collision-safe
+### R3 — Make revision history authoritative and collision-safe
 
 Completed: 2026-09-15.
 
@@ -83,28 +83,28 @@ Files changed:
 - `src-tauri/src/repository.rs`:
   - Schema v3: `text_versions` rebuilt with a stable `version_id` PK (`(text_id, version_id)`); legacy rows migrated with generated ids, preserving timestamps and content; version cap orders by `saved_at` but identifies rows by id. DBs newer than `SUPPORTED_SCHEMA_VERSION` (3) are refused.
   - `text_save` no longer takes snapshot flags from the frontend: the snapshot decision (compare persisted old vs new content) happens inside the transaction.
-  - `next_version_id()` â€” nanos + process counter; same-millisecond snapshots stay distinguishable.
-  - `text_restore(id, version_id, now, expected_rev)` â€” resolves the target content INSIDE Rust from the stable version id; rejects missing ids, wrong-document ids, and stale expected revisions without mutation; snapshots the replaced current content; derives snippet/word count; returns `RestoreResult {rev, savedAt, content, snippet, wordCount, updatedAt}`.
-  - `project_delete` is now one domain operation: unlinks texts AND threads (`project_id` â†’ NULL), removes the brief, deletes the project â€” all in one transaction; nothing dangling remains.
+  - `next_version_id()` — nanos + process counter; same-millisecond snapshots stay distinguishable.
+  - `text_restore(id, version_id, now, expected_rev)` — resolves the target content INSIDE Rust from the stable version id; rejects missing ids, wrong-document ids, and stale expected revisions without mutation; snapshots the replaced current content; derives snippet/word count; returns `RestoreResult {rev, savedAt, content, snippet, wordCount, updatedAt}`.
+  - `project_delete` is now one domain operation: unlinks texts AND threads (`project_id` → NULL), removes the brief, deletes the project — all in one transaction; nothing dangling remains.
   - Import paths generate version ids for legacy/dump rows lacking them; exports carry ids.
-- `src/types/index.ts` â€” `TextVersion` gains `versionId`.
-- `src/utils/repository.ts` â€” `TextSaveArgs` lost `snapshotCurrent`/`versionSavedAt`; `textRestore(id, versionId)` returns `TextRestoreResult`; JSON backend mirrors the in-transaction snapshot comparison, restores by version id, and `projectDelete` unlinks texts+threads in one registry pass; version ids generated for JSON snapshots.
-- `src/stores/libraryStore.ts` â€” `updateText` no longer computes snapshot flags; `restoreVersion(id, versionId)` refreshes cache/meta from the authoritative result.
-- `src/stores/projectStore.ts` â€” doc comment: the repository unlinks in the delete operation.
-- `src/components/library/HistoryDialog.tsx` â€” selection/keying by `versionId`.
-- `src/components/library/ProjectDetail.tsx` â€” removed the manual per-text unlink loop (the domain op handles texts AND conversations).
-- `src/test/fakeRepository.ts` â€” mirrors the R3 semantics.
-- Tests: Rust (same-ms distinguishable, editâ†’saveâ†’save history, restore-by-id resolution, wrong-doc/missing restore without mutation, stale restore rejection, project unlink, v3 migration) and frontend (history preservation on double save, restore by version id, missing-version failure, project delete unlinking); libraryStore tests updated to `versionId`.
+- `src/types/index.ts` — `TextVersion` gains `versionId`.
+- `src/utils/repository.ts` — `TextSaveArgs` lost `snapshotCurrent`/`versionSavedAt`; `textRestore(id, versionId)` returns `TextRestoreResult`; JSON backend mirrors the in-transaction snapshot comparison, restores by version id, and `projectDelete` unlinks texts+threads in one registry pass; version ids generated for JSON snapshots.
+- `src/stores/libraryStore.ts` — `updateText` no longer computes snapshot flags; `restoreVersion(id, versionId)` refreshes cache/meta from the authoritative result.
+- `src/stores/projectStore.ts` — doc comment: the repository unlinks in the delete operation.
+- `src/components/library/HistoryDialog.tsx` — selection/keying by `versionId`.
+- `src/components/library/ProjectDetail.tsx` — removed the manual per-text unlink loop (the domain op handles texts AND conversations).
+- `src/test/fakeRepository.ts` — mirrors the R3 semantics.
+- Tests: Rust (same-ms distinguishable, edit→save→save history, restore-by-id resolution, wrong-doc/missing restore without mutation, stale restore rejection, project unlink, v3 migration) and frontend (history preservation on double save, restore by version id, missing-version failure, project delete unlinking); libraryStore tests updated to `versionId`.
 
 Commands run and results:
-- `npx tsc --noEmit` â€” OK.
-- `npm test` â€” 149 tests passed (13 files).
-- `cargo test --lib` â€” 39 tests passed.
-- `cargo check` â€” OK.
+- `npx tsc --noEmit` — OK.
+- `npm test` — 149 tests passed (13 files).
+- `cargo test --lib` — 39 tests passed.
+- `cargo check` — OK.
 
 Acceptance status (R3):
 - [x] Two different revisions with identical timestamps remain distinguishable.
-- [x] Edit â†’ Save â†’ Save again before debounce does not lose history.
+- [x] Edit → Save → Save again before debounce does not lose history.
 - [x] Restoring a missing or wrong-document revision fails without mutation.
 - [x] Restore failure leaves the reader/cache displaying the last committed document (restore rejects before any write).
 - [x] Project deletion leaves no dangling live project references (texts + conversations unlinked in one op).
@@ -113,28 +113,28 @@ Acceptance status (R3):
 Known limitations:
 - The restore's snapshot timestamp for replaced content comes from the frontend's `now` (one argument); version identity does not depend on it.
 
-### R4 â€” Replace unsafe migration with a validated import
+### R4 — Replace unsafe migration with a validated import
 
 Completed: 2026-09-15.
 
 Files changed:
-- `src-tauri/src/repository.rs` â€” migration core rewritten as an inventory â†’ validate â†’ import â†’ verify â†’ archive pipeline:
+- `src-tauri/src/repository.rs` — migration core rewritten as an inventory → validate → import → verify → archive pipeline:
   - `read_json_classified` distinguishes missing / unreadable / malformed; read and parse failures are never treated as "missing".
-  - `build_legacy_dataset(dir)` builds the WHOLE validated dataset in memory before anything is activated. A malformed/unreadable REGISTRY file aborts with issues â†’ `completed: false`, no marker, no archive, no import. Invalid individual records (including ids that fail `is_safe_id` â€” checked BEFORE any path is constructed) are skipped and reported as issues. Orphan body/history files (no registry entry) are inventoried in the report, never imported, never touched.
+  - `build_legacy_dataset(dir)` builds the WHOLE validated dataset in memory before anything is activated. A malformed/unreadable REGISTRY file aborts with issues → `completed: false`, no marker, no archive, no import. Invalid individual records (including ids that fail `is_safe_id` — checked BEFORE any path is constructed) are skipped and reported as issues. Orphan body/history files (no registry entry) are inventoried in the report, never imported, never touched.
   - `run_legacy_import` imports the dataset + sets the `legacy_imported` marker in ONE transaction, then `verify_import` checks counts, byte-level content equality, and relationships before commit. Archive only happens after commit.
-  - `archive_files` writes to a UNIQUE `legacy/<run>` directory per run â€” previous archives are never overwritten; files that cannot be moved stay in place.
-  - `init_at(dir, db)` â€” testable init core: idempotent no-op (with `already_open` flag) when the repository is already open; `db_init` now returns a `MigrationReport` (counts + issues + archived dir). `db_import_legacy` (v1 restore) fails visibly on malformed input instead of importing partial data.
-- `src/utils/bootstrap.ts` â€” rewritten: inventories `dws:*` browser copies and reconciles them safely â€” adoption only writes to a MISSING native file and removes the copy only after success; identical copies are deduplicated; conflicting native/browser versions are BOTH preserved and reported (native is never silently assumed newer); malformed copies are kept and reported. Bootstrap resets its cached promise on failure so startup can be retried; returns `BootstrapResult { migration, issues, adopted }`.
-- `src/utils/storage.ts` â€” `loadJson` no longer silently adopts (and deletes) legacy `dws:*` copies on a native miss; that side-effecting path is gone (adoption is exclusively the verified bootstrap's job).
-- `src/App.tsx` â€” startup error screen rewritten (accurate text: nothing was imported, no files deleted, Retry button); a recovery-report banner lists malformed/orphan/conflict findings after a completed migration.
+  - `archive_files` writes to a UNIQUE `legacy/<run>` directory per run — previous archives are never overwritten; files that cannot be moved stay in place.
+  - `init_at(dir, db)` — testable init core: idempotent no-op (with `already_open` flag) when the repository is already open; `db_init` now returns a `MigrationReport` (counts + issues + archived dir). `db_import_legacy` (v1 restore) fails visibly on malformed input instead of importing partial data.
+- `src/utils/bootstrap.ts` — rewritten: inventories `dws:*` browser copies and reconciles them safely — adoption only writes to a MISSING native file and removes the copy only after success; identical copies are deduplicated; conflicting native/browser versions are BOTH preserved and reported (native is never silently assumed newer); malformed copies are kept and reported. Bootstrap resets its cached promise on failure so startup can be retried; returns `BootstrapResult { migration, issues, adopted }`.
+- `src/utils/storage.ts` — `loadJson` no longer silently adopts (and deletes) legacy `dws:*` copies on a native miss; that side-effecting path is gone (adoption is exclusively the verified bootstrap's job).
+- `src/App.tsx` — startup error screen rewritten (accurate text: nothing was imported, no files deleted, Retry button); a recovery-report banner lists malformed/orphan/conflict findings after a completed migration.
 - Tests: `src/utils/__tests__/bootstrap.test.ts` (NEW: adoption, permission failure preserves the copy, malformed kept, conflicts preserved, dedupe, incomplete report surfacing, retry), `storage.test.ts` (adoption test replaced by no-side-effects test), Rust tests (malformed registry blocks marker; unreadable content preserved; orphans inventoried; unsafe ids rejected; Unicode + legacy array threads survive; idempotent init; unique archive dirs; rewritten import tests).
 
 Commands run and results:
-- `npx tsc --noEmit` â€” OK.
-- `npm test` â€” 156 tests passed (14 files).
-- `cargo test --lib` â€” 46 tests passed.
-- `cargo check` â€” OK.
-- `npm run build` â€” OK.
+- `npx tsc --noEmit` — OK.
+- `npm test` — 156 tests passed (14 files).
+- `cargo test --lib` — 46 tests passed.
+- `cargo check` — OK.
+- `npm run build` — OK.
 
 Acceptance status (R4):
 - [x] Permission failure preserves the dws: copy.
@@ -148,32 +148,32 @@ Acceptance status (R4):
 Known limitations:
 - Conflicting browser copies are preserved in their `dws:*` key with a report pointer; an explicit conflict-resolution UI (choose a winner) is deferred until the Phase 3 workspace shell.
 
-### R5 â€” Make backup/restore an exclusive, validated operation
+### R5 — Make backup/restore an exclusive, validated operation
 
 Completed: 2026-09-15.
 
 Files changed:
 - `src-tauri/src/repository.rs`:
   - Schema v4: `preferences` table (key/value, JSON-encoded values).
-  - `apply_dump(tx, dump)` â€” dump application on an open transaction; `db_restore(dump, prefs)` replaces domain rows AND preferences in ONE transaction and returns real `RestoreCounts` (texts/projects/threads/messages/versions); `db_import_legacy` returns `MigrationCounts` instead of a file count. `db_prefs_get/get_all/set` commands. Migration bookkeeping (app_meta) is never exported and never touched by a restore.
-- `src/utils/preferences.ts` â€” NEW: `getPref`/`getAllPrefs`/`setPref` â€” SQLite preferences on desktop, localStorage in browser; credentials never pass through here.
-- `src/utils/backup.ts` â€” rewritten:
+  - `apply_dump(tx, dump)` — dump application on an open transaction; `db_restore(dump, prefs)` replaces domain rows AND preferences in ONE transaction and returns real `RestoreCounts` (texts/projects/threads/messages/versions); `db_import_legacy` returns `MigrationCounts` instead of a file count. `db_prefs_get/get_all/set` commands. Migration bookkeeping (app_meta) is never exported and never touched by a restore.
+- `src/utils/preferences.ts` — NEW: `getPref`/`getAllPrefs`/`setPref` — SQLite preferences on desktop, localStorage in browser; credentials never pass through here.
+- `src/utils/backup.ts` — rewritten:
   - v3 format: `{ format, version: 3, data: <dump>, preferences }` (v1/v2 readers retained; `BACKUP_VERSION = 3`).
-  - Export drains pending saves BEFORE the barrier goes up (synchronous hand-off), then holds newly scheduled saves and releases them after the snapshot â€” "export right after Save includes that save".
+  - Export drains pending saves BEFORE the barrier goes up (synchronous hand-off), then holds newly scheduled saves and releases them after the snapshot — "export right after Save includes that save".
   - `parseBackupBundle` deeply validates v2/v3 dumps: row shapes, duplicate ids, relationship integrity (contents/versions/briefs/messages referencing known parents), content types, supported versions; rejects bundles carrying a credential.
   - Restore runs one exclusive barrier: aborts active AI ops (via callback), blocks persistence (`beginMaintenance`), drains, writes a recovery snapshot of the CURRENT dataset (`pre-restore-<ts>.json`), commits restored domain data + preferences in one `db_restore`, discards held pre-restore saves (`endMaintenance("discard")`), and bumps the dataset generation. Desktop backups are rejected in browser dev BEFORE anything changes. v1 restores route settings into preferences (credentials stripped) and report real counts.
   - `datasetGeneration()` exported (AI-operation invalidation lands in R8).
-- `src/stores/settingsStore.ts` / `src/stores/chatStore.ts` / `src/components/settings/ApiConfigForm.tsx` â€” preferences now read/write the SQLite table (legacy `settings.json`/`config.json`/`zen-prices.json` are migrated on first load and remain read fallbacks). `setConfig` persists a KEYLESS config (apiKey stripped; the key lives only in the OS keychain) â€” a first step toward R7's full credential isolation.
-- `src/stores/libraryStore.ts` / `projectStore.ts` / `chatStore.ts` â€” restore-reload paths no longer flush (the barrier drained; flushing post-restore could write pre-restore state back).
-- `src/components/settings/SettingsDialog.tsx` â€” import handler aborts in-flight AI sends, relies on the restore's internal barrier, and reports real counts ("N documents, M projects, K conversations restored"); export handler reports dump counts.
+- `src/stores/settingsStore.ts` / `src/stores/chatStore.ts` / `src/components/settings/ApiConfigForm.tsx` — preferences now read/write the SQLite table (legacy `settings.json`/`config.json`/`zen-prices.json` are migrated on first load and remain read fallbacks). `setConfig` persists a KEYLESS config (apiKey stripped; the key lives only in the OS keychain) — a first step toward R7's full credential isolation.
+- `src/stores/libraryStore.ts` / `projectStore.ts` / `chatStore.ts` — restore-reload paths no longer flush (the barrier drained; flushing post-restore could write pre-restore state back).
+- `src/components/settings/SettingsDialog.tsx` — import handler aborts in-flight AI sends, relies on the restore's internal barrier, and reports real counts ("N documents, M projects, K conversations restored"); export handler reports dump counts.
 - Tests: `src/utils/__tests__/backup.test.ts` (NEW: export includes pre-export saves, credential stripping, v3 validation incl. duplicate-id/relationship/credential rejections, desktop-backup rejection in browser, barrier hold/discard/release, failed restore releases the barrier, generation bump), Rust tests (restore replaces domain+prefs in one transaction, missing content does not inherit live content, prefs roundtrip).
 
 Commands run and results:
-- `npx tsc --noEmit` â€” OK.
-- `npm test` â€” 168 tests passed (15 files).
-- `cargo test --lib` â€” 48 tests passed.
-- `cargo check` â€” OK (no warnings).
-- `npm run build` â€” OK.
+- `npx tsc --noEmit` — OK.
+- `npm test` — 168 tests passed (15 files).
+- `cargo test --lib` — 48 tests passed.
+- `cargo check` — OK (no warnings).
+- `npm run build` — OK.
 
 Acceptance status (R5):
 - [x] Export immediately after Save includes that save.
@@ -187,28 +187,28 @@ Known limitations:
 - v1 restore inside the desktop app still performs a stepwise file replacement + legacy import (not one transaction); v2/v3 restores are fully atomic. v1 is a legacy reader.
 - Scheduled saves made DURING an export are released after it; they are not part of the exported snapshot (by design).
 
-### R6 â€” Protect unsaved drafts and lifecycle transitions
+### R6 — Protect unsaved drafts and lifecycle transitions
 
 Completed: 2026-09-15.
 
 Files changed:
-- `src/stores/draftStore.ts` â€” NEW: recoverable draft sessions keyed `text:<id>` / `project-brief:<id>` (content + editor metadata + savedAt/error state), persisted through the preferences table (debounced, restart-safe), hydrated at startup; `markSaved`/`markError`/`clearDraft` (discard is always explicit); `flushDrafts()` joins the shutdown/relaunch drains.
-- `src/components/library/LibraryEditor.tsx` â€” the draft no longer lives in component state: the editor projects the store session, so switching tabs/documents/panels keeps it and a restart recovers the last typed draft (draft wins over the stored body on load). Editing is disabled while a document loads ("Loadingâ€¦"); a recoverable load failure shows an error with "Retry load". Explicit Save awaits the acknowledgment (flush + idle) before showing "Saved" and navigating; a failed save retains the editable content with an explicit Retry / Discard draft banner.
-- `src/components/library/ProjectDetail.tsx` â€” the project brief gets the same protection: draft session per project, acknowledged-save flash only after flush, Retry/Discard on failure.
-- `src/stores/settingsStore.ts` â€” `loadSettings` is a handled startup state: a failed read applies defaults, sets `isLoaded` (no permanent blank window) and exposes `settingsError`.
-- `src/App.tsx` â€” the close drain now also flushes recovery drafts (after the domain drains).
-- `src/components/settings/SettingsDialog.tsx` â€” updater relaunch goes through the same persistence drain (domain flushes + drafts) before `relaunch()`.
-- Tests: `src/stores/__tests__/draftStore.test.ts` (NEW: draft survives remount, typing invalidates acknowledgment, save errors retain content, restart recovery via hydrate, debounced persistence lands on its own, unreadable store starts clean, close during the debounce window flushes), `repository.test.ts` (close during a delayed save waits for the write to land â€” real adapter, delayed transport).
+- `src/stores/draftStore.ts` — NEW: recoverable draft sessions keyed `text:<id>` / `project-brief:<id>` (content + editor metadata + savedAt/error state), persisted through the preferences table (debounced, restart-safe), hydrated at startup; `markSaved`/`markError`/`clearDraft` (discard is always explicit); `flushDrafts()` joins the shutdown/relaunch drains.
+- `src/components/library/LibraryEditor.tsx` — the draft no longer lives in component state: the editor projects the store session, so switching tabs/documents/panels keeps it and a restart recovers the last typed draft (draft wins over the stored body on load). Editing is disabled while a document loads ("Loading…"); a recoverable load failure shows an error with "Retry load". Explicit Save awaits the acknowledgment (flush + idle) before showing "Saved" and navigating; a failed save retains the editable content with an explicit Retry / Discard draft banner.
+- `src/components/library/ProjectDetail.tsx` — the project brief gets the same protection: draft session per project, acknowledged-save flash only after flush, Retry/Discard on failure.
+- `src/stores/settingsStore.ts` — `loadSettings` is a handled startup state: a failed read applies defaults, sets `isLoaded` (no permanent blank window) and exposes `settingsError`.
+- `src/App.tsx` — the close drain now also flushes recovery drafts (after the domain drains).
+- `src/components/settings/SettingsDialog.tsx` — updater relaunch goes through the same persistence drain (domain flushes + drafts) before `relaunch()`.
+- Tests: `src/stores/__tests__/draftStore.test.ts` (NEW: draft survives remount, typing invalidates acknowledgment, save errors retain content, restart recovery via hydrate, debounced persistence lands on its own, unreadable store starts clean, close during the debounce window flushes), `repository.test.ts` (close during a delayed save waits for the write to land — real adapter, delayed transport).
 
 Commands run and results:
-- `npx tsc --noEmit` â€” OK.
-- `npm test` â€” 176 tests passed (16 files).
-- `cargo test --lib` â€” 48 tests passed.
-- `cargo check` â€” OK.
-- `npm run build` â€” OK.
+- `npx tsc --noEmit` — OK.
+- `npm test` — 176 tests passed (16 files).
+- `cargo test --lib` — 48 tests passed.
+- `cargo check` — OK.
+- `npm run build` — OK.
 
 Acceptance status (R6):
-- [x] Edit â†’ switch tabs â†’ return retains the draft (store-owned sessions).
+- [x] Edit → switch tabs → return retains the draft (store-owned sessions).
 - [x] Restart restores the last acknowledged recovery draft (preferences-backed, hydrated at startup).
 - [x] A delayed initial load cannot overwrite newly typed content (recovered draft wins over the load; editing disabled while loading).
 - [x] Closing during a delayed save waits for it (drain test with delayed transport).
@@ -218,20 +218,20 @@ Acceptance status (R6):
 - [x] "Saved" shows only for acknowledged persistence (flush + idle before the indicator).
 
 Known limitations:
-- Component-level (rendered-DOM) tests are not yet possible (no jsdom/testing-library) â€” the draft lifecycle is covered at store level; component tests are queued for R11 (which may add the missing tooling).
+- Component-level (rendered-DOM) tests are not yet possible (no jsdom/testing-library) — the draft lifecycle is covered at store level; component tests are queued for R11 (which may add the missing tooling).
 - Pending preferences writes flush on close/relaunch, but a failed preference write is not yet surfaced in the UI (draft stays in memory and retries on the next edit).
 
-### R7 â€” Complete credential isolation
+### R7 — Complete credential isolation
 
 Completed: 2026-09-15.
 
 Files changed:
-- `src/utils/keychain.ts` â€” rewritten: credentials are keyed by provider/profile + NORMALIZED endpoint identity (`dws-key:<provider>:<endpoint>`); `saveCredential` verifies the native write with a read-back (half-written entries are removed); `loadCredential`/`deleteCredential` per profile; legacy single-account entry (`api_key`) and legacy config.json plaintext helpers for migration.
+- `src/utils/keychain.ts` — rewritten: credentials are keyed by provider/profile + NORMALIZED endpoint identity (`dws-key:<provider>:<endpoint>`); `saveCredential` verifies the native write with a read-back (half-written entries are removed); `loadCredential`/`deleteCredential` per profile; legacy single-account entry (`api_key`) and legacy config.json plaintext helpers for migration.
 - `src/stores/chatStore.ts`:
   - `ApiConfig` gains `keychainAccount` (credential REFERENCE, not the secret) and `sessionKeyOnly`.
-  - `setConfig` stores the key ONLY in the OS keychain under the profile account; the persisted config (SQLite prefs) never contains the key. A verified store allows removing the legacy plaintext copies of THAT key (legacy entries holding a different profile's key stay). Unavailable/unverifiable keychain â†’ session-only credential (in memory, never persisted) with a UI note.
+  - `setConfig` stores the key ONLY in the OS keychain under the profile account; the persisted config (SQLite prefs) never contains the key. A verified store allows removing the legacy plaintext copies of THAT key (legacy entries holding a different profile's key stay). Unavailable/unverifiable keychain → session-only credential (in memory, never persisted) with a UI note.
   - Clearing the key deletes this profile's credential + stale legacy entries.
-  - `loadConfig` resolves the key from THIS profile's account only â€” a restored/edited configuration for another provider can never reuse the currently stored key. One-time verified migration of the legacy shared keychain entry and of config.json plaintext (file stripped only after the verified profile write; on failure the file is kept â€” recoverability).
+  - `loadConfig` resolves the key from THIS profile's account only — a restored/edited configuration for another provider can never reuse the currently stored key. One-time verified migration of the legacy shared keychain entry and of config.json plaintext (file stripped only after the verified profile write; on failure the file is kept — recoverability).
 - `src/components/settings/ApiConfigForm.tsx`:
   - Provider switch selects THAT profile's stored credential or clears the field (never carries the prior profile's key); model lists load without any key on switch.
   - Sequence guard discards stale model-list/test responses after profile changes.
@@ -240,11 +240,11 @@ Files changed:
 - Tests: `src/stores/__tests__/credentialIsolation.test.ts` (NEW, 11 tests: per-profile accounts + endpoint normalization, verified read-back, keyless persistence, no cross-profile key reuse on restored configs, restart survival, clearing removes credentials, session-only fallback, failed/unverifiable writes, legacy keychain + plaintext migration with recoverability on failure); `api.test.ts` config literal updated.
 
 Commands run and results:
-- `npx tsc --noEmit` â€” OK.
-- `npm test` â€” 187 tests passed (17 files).
-- `cargo test --lib` â€” 48 tests passed.
-- `cargo check` â€” OK.
-- `npm run build` â€” OK.
+- `npx tsc --noEmit` — OK.
+- `npm test` — 187 tests passed (17 files).
+- `cargo test --lib` — 48 tests passed.
+- `cargo check` — OK.
+- `npm run build` — OK.
 
 Acceptance status (R7):
 - [x] Switching provider does not transmit the prior key (profile-scoped field + model lists loaded keyless on switch; form-level logic; send path always uses the saved profile's own key).
@@ -253,35 +253,35 @@ Acceptance status (R7):
 - [x] New configuration and ordinary backups contain no plaintext key (persisted config is keyless; R5 validation rejects bundles carrying keys).
 
 Known limitations:
-- The ApiConfigForm provider-switch/test logic is not covered by rendered-component tests (no jsdom yet â€” R11 decision); the store/transport-level contract is fully tested.
+- The ApiConfigForm provider-switch/test logic is not covered by rendered-component tests (no jsdom yet — R11 decision); the store/transport-level contract is fully tested.
 - A keychain-unavailable environment still cannot STORE credentials; the session-only path is the documented fallback.
 
-### R8 â€” Complete AI operation ownership
+### R8 — Complete AI operation ownership
 
 Completed: 2026-09-15.
 
 Files changed:
-- `src/services/aiOperations.ts` â€” NEW: the operation service owns every AI operation's lifetime outside React. Each operation carries a request id, the owning thread (and future document id), the target message id, the dataset generation at start, an immutable snapshot of config + system prompt + history, the attachments it consumes, its own abort controller, an independent output buffer, and a terminal status. Settlement is idempotent (first call wins; late deltas after settlement are ignored). `isStaleOperation` (generation mismatch) gates every commit; `invalidateAllOperations` aborts + terminalizes running ops (restore). `appendOutput` is navigation-independent.
-- `src-tauri/src/repository.rs` â€” schema v5: stable message ids (`msg_id` column; serialized as `id`, default null for legacy rows; ids flow through create/save/append/import/export); `thread_replace_message(id, msgId, content, updatedAt)` â€” replace-by-stable-id, update-only, bumps the thread revision, fails on unknown ids without mutation.
-- `src/utils/repository.ts` â€” `StoredMessage.id: string | null`; `threadReplaceMessage` (SQLite + JSON backends, flushes pending saves first); JSON thread files carry ids.
+- `src/services/aiOperations.ts` — NEW: the operation service owns every AI operation's lifetime outside React. Each operation carries a request id, the owning thread (and future document id), the target message id, the dataset generation at start, an immutable snapshot of config + system prompt + history, the attachments it consumes, its own abort controller, an independent output buffer, and a terminal status. Settlement is idempotent (first call wins; late deltas after settlement are ignored). `isStaleOperation` (generation mismatch) gates every commit; `invalidateAllOperations` aborts + terminalizes running ops (restore). `appendOutput` is navigation-independent.
+- `src-tauri/src/repository.rs` — schema v5: stable message ids (`msg_id` column; serialized as `id`, default null for legacy rows; ids flow through create/save/append/import/export); `thread_replace_message(id, msgId, content, updatedAt)` — replace-by-stable-id, update-only, bumps the thread revision, fails on unknown ids without mutation.
+- `src/utils/repository.ts` — `StoredMessage.id: string | null`; `threadReplaceMessage` (SQLite + JSON backends, flushes pending saves first); JSON thread files carry ids.
 - `src/stores/chatStore.ts`:
   - `ChatMessage.id` (stable identity) + `messageKey` prefers the id (legacy fallback for unmigrated messages); `addMessage` assigns ids; `storedToMessage` migrates legacy rows (order/content unchanged; ids persist on the next save).
-  - `commitToOwner(threadId, append|replace)` â€” commits to the OWNER regardless of the visible conversation (in-memory + schedule when active; atomic repository append/replace when hidden); refuses commits for deleted/restored owners.
-  - Per-thread composer attachments (`threadAttachments`) with `get/set/clearThreadAttachments` â€” a parse finishing after navigation lands in the conversation where it started; clears remove only consumed attachments; attachments die with their thread and with restores.
-- `src/components/tabs/ChatTab.tsx` â€” sends/retries/regenerations run as operations (context snapshot recorded on the op after the brief load; the request replays the snapshot); onDelta writes the op buffer + mirrors to the store only while the thread is visible; stop-partial commits the OPERATION's buffer (not the display buffer) to the owner; failed background sends retain their retry state in the op; consumed attachments are cleared only for the request's own set.
-- `src/components/chat/MessageList.tsx` â€” the deslop cleanup is a `cleanup` operation: ownership pinned at start, settled through the service, committed to the owner (in-memory or repository append).
-- `src/utils/backup.ts` â€” `bumpDatasetGeneration()` exported (also used by tests).
+  - `commitToOwner(threadId, append|replace)` — commits to the OWNER regardless of the visible conversation (in-memory + schedule when active; atomic repository append/replace when hidden); refuses commits for deleted/restored owners.
+  - Per-thread composer attachments (`threadAttachments`) with `get/set/clearThreadAttachments` — a parse finishing after navigation lands in the conversation where it started; clears remove only consumed attachments; attachments die with their thread and with restores.
+- `src/components/tabs/ChatTab.tsx` — sends/retries/regenerations run as operations (context snapshot recorded on the op after the brief load; the request replays the snapshot); onDelta writes the op buffer + mirrors to the store only while the thread is visible; stop-partial commits the OPERATION's buffer (not the display buffer) to the owner; failed background sends retain their retry state in the op; consumed attachments are cleared only for the request's own set.
+- `src/components/chat/MessageList.tsx` — the deslop cleanup is a `cleanup` operation: ownership pinned at start, settled through the service, committed to the owner (in-memory or repository append).
+- `src/utils/backup.ts` — `bumpDatasetGeneration()` exported (also used by tests).
 - Tests: `src/services/__tests__/aiOperations.test.ts` (NEW: unique ids/ownership, context snapshots, navigation-independent buffers, terminal settlement, abortable cleanups, restore invalidation/staleness, regeneration targets) and chatStore tests (stable id assignment + migration without reordering, one-time background regeneration replacement, commits refused for deleted owners, buffer append to hidden owners, per-thread attachment isolation + consumed-only clearing).
 
 Commands run and results:
-- `npx tsc --noEmit` â€” OK.
-- `npm test` â€” 198 tests passed (18 files).
-- `cargo test --lib` â€” 49 tests passed.
-- `cargo check` â€” OK.
-- `npm run build` â€” OK.
+- `npx tsc --noEmit` — OK.
+- `npm test` — 198 tests passed (18 files).
+- `cargo test --lib` — 49 tests passed.
+- `cargo check` — OK.
+- `npm run build` — OK.
 
 Acceptance status (R8):
-- [x] A â†’ B â†’ A navigation during generation does not lose text (op buffer + commit-to-owner; tested).
+- [x] A → B → A navigation during generation does not lose text (op buffer + commit-to-owner; tested).
 - [x] Background regeneration updates the intended message once (stable-id replace; tested).
 - [x] Cleanup can be stopped and cannot interleave unpredictably with chat (owned operations; tested).
 - [x] Deleting the owner or restoring data prevents stale commits (existence + generation checks; tested).
