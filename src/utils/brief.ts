@@ -23,6 +23,7 @@ export function defaultBrief(): WritingBrief {
     citations: "resource-list",
     citationsOther: "",
     length: "undecided",
+    lengthOther: "",
     language: "English",
     mustInclude: "",
     mustAvoid: "",
@@ -55,7 +56,10 @@ export function briefEntries(brief: WritingBrief): [string, string][] {
       ? brief.citationsOther ?? ""
       : citationLabel(brief.citations),
   );
-  add("Length", lengthLabel(brief.length));
+  add(
+    "Length",
+    brief.length === "other" ? brief.lengthOther ?? "" : lengthLabel(brief.length),
+  );
   add("Language", brief.language);
   add("Must include", brief.mustInclude);
   add("Must avoid", brief.mustAvoid);
