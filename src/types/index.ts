@@ -327,13 +327,14 @@ export function citationLabel(id: CitationId): string {
 }
 
 /** The fixed set of length options for the writing brief. */
-export type LengthId = "short" | "medium" | "long" | "undecided";
+export type LengthId = "short" | "medium" | "long" | "other" | "undecided";
 
 /** Filterable, human-readable labels for the fixed length set. */
 export const LENGTHS: { id: LengthId; label: string }[] = [
   { id: "short", label: "Short (under ~500 words)" },
   { id: "medium", label: "Medium (~500-1500 words)" },
   { id: "long", label: "Long (over ~1500 words)" },
+  { id: "other", label: "Other" },
   { id: "undecided", label: "Not decided yet" },
 ];
 
@@ -367,6 +368,8 @@ export interface WritingBrief {
   citationsOther?: string;
   /** Target length of the text. */
   length: LengthId;
+  /** Free-text length, used when `length` is "other". */
+  lengthOther?: string;
   /** Language to write in (e.g. "English", "Norwegian bokmål"). */
   language: string;
   /** Points, sources, or angles the text must include. */
