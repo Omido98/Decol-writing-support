@@ -178,6 +178,16 @@ export default function BriefForm({
                 options={LENGTHS}
                 onChange={(v) => set("length", v)}
               />
+              {brief.length === "other" && (
+                <Input
+                  value={brief.lengthOther ?? ""}
+                  onChange={(e) => set("lengthOther", e.target.value)}
+                  placeholder="Describe the length (e.g. under 500 words, 1000-2000, 3000 ±10%)…"
+                  className="bg-field border-border self-end"
+                  disabled={busy}
+                  aria-label="Custom length"
+                />
+              )}
 
               <BriefSelect
                 id="brief-audience"

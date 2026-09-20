@@ -38,6 +38,16 @@ describe("composeBriefMessage", () => {
     expect(msg).toContain("Citations: No citations");
   });
 
+  it("uses the free-text value when length is set to Other", () => {
+    const brief = defaultBrief();
+    brief.topic = "Topic";
+    brief.length = "other";
+    brief.lengthOther = "1000-2000 words, 3000 with sources";
+
+    const msg = composeBriefMessage(brief);
+    expect(msg).toContain("Length: 1000-2000 words, 3000 with sources");
+  });
+
   it("omits empty optional fields", () => {
     const brief = defaultBrief();
     brief.topic = "Topic";
