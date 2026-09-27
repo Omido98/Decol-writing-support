@@ -408,6 +408,15 @@ interface ChatState {
       files?: FileAttachment[];
     },
   ) => void;
+  /**
+   * Functional update of one thread's composer attachments. The updater
+   * receives the CURRENT stored slot, so async writers (content loads,
+   * parses) can never overwrite each other with a stale snapshot.
+   */
+  updateThreadAttachments: (
+    threadId: string,
+    updater: (prev: ThreadAttachments) => ThreadAttachments,
+  ) => void;
   /** Drop attachments a completed request consumed (only those). */
   clearThreadAttachments: (
     threadId: string,
@@ -1084,6 +1093,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
           files: patch.files ?? existing.files,
         },
       };
+      scheduleAttachmentPersist(threadAttachments);
+      return { threadAttachments };
+    }),
+
+  updateThreadAttachments: (threadId, updater) =>
+    set((s) => {
+      const existing = s.threadAttachments[threadId] ?? {
+        library: [],
+        files: [],
+      };
+      const next = updater(existing);
+      if (next === existing) return {};
+      const threadAttachments = { ...s.threadAttachments, [threadId]: next };
       scheduleAttachmentPersist(threadAttachments);
       return { threadAttachments };
     }),

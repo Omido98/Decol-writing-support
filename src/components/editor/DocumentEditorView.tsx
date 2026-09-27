@@ -32,7 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowLeft, Save, TriangleAlert, Type, Quote, ListEnd, Superscript } from "lucide-react";
+import { ArrowLeft, MessageSquarePlus, Save, TriangleAlert, Type, Quote, ListEnd, Superscript } from "lucide-react";
 import { textTypeLabel, type TextTypeId } from "@/types";
 
 const TEXT_TYPE_IDS: TextTypeId[] = [
@@ -88,6 +88,7 @@ export default function DocumentEditorView({
   const [docSize, setDocSize] = useState({ words: 0, characters: 0 });
   const docFontSize = useAppStore((s) => s.docFontSize);
   const setDocFontSize = useAppStore((s) => s.setDocFontSize);
+  const chatAboutText = useAppStore((s) => s.chatAboutText);
 
   // A save that finishes after the user navigated away must not change
   // the route (late new-document callbacks would yank them elsewhere).
@@ -284,6 +285,17 @@ export default function DocumentEditorView({
           className="h-8 bg-field w-40"
           aria-label="Folder"
         />
+        {id && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void chatAboutText(id)}
+            title="Start a new conversation about this document (it is attached to the first message)"
+          >
+            <MessageSquarePlus className="size-4 mr-1 text-text-secondary" />
+            Chat about this
+          </Button>
+        )}
         <div className="flex-1" />
         {/* Citations (5.4b): insert from YOUR sources; bibliography from
             the citations actually in the document. */}

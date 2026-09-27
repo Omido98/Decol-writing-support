@@ -63,12 +63,11 @@ export default function LibraryReader({
 }) {
   const meta = useLibraryStore((s) => s.texts.find((t) => t.id === id) ?? null);
   const loadTextContent = useLibraryStore((s) => s.loadTextContent);
-  const requestAttach = useLibraryStore((s) => s.requestAttach);
   const deleteText = useLibraryStore((s) => s.deleteText);
   const projects = useProjectStore((s) => s.projects);
   const projectsLoaded = useProjectStore((s) => s.projectsLoaded);
   const loadProjects = useProjectStore((s) => s.loadProjects);
-  const setActiveTab = useAppStore((s) => s.setActiveTab);
+  const chatAboutText = useAppStore((s) => s.chatAboutText);
 
   const [body, setBody] = useState<DocumentBody | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -292,14 +291,11 @@ export default function LibraryReader({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => {
-              requestAttach(id);
-              setActiveTab("chat");
-            }}
-            title="Attach to the next chat message"
+            onClick={() => void chatAboutText(id)}
+            title="Start a new conversation about this document (it is attached to the first message)"
           >
             <BookOpenCheck className="size-4 mr-1 text-text-secondary" />
-            Ask the chat
+            Chat about this
           </Button>
           <Button variant="ghost" size="sm" onClick={() => onEdit(id)}>
             <Pencil className="size-4 mr-1 text-text-secondary" />

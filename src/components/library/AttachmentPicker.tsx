@@ -36,18 +36,29 @@ export default function AttachmentPicker({
   const [draft, setDraft] = useState<Set<string>>(new Set(selectedIds));
   const [search, setSearch] = useState("");
 
+  // Seed the draft ONLY when the picker OPENS: a late texts load (or any
+  // attachment change behind the dialog) must never wipe in-progress checks.
   useEffect(() => {
     if (!open) return;
     setDraft(new Set(selectedIds));
     setSearch("");
-    if (!textsLoaded) void loadTexts();
-    // selectedIds only seeds the draft when the picker opens
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Load the inventory if needed — separate from the seeding so the
+  // selection is not reset when the load completes.
+  useEffect(() => {
+    if (!open || textsLoaded) return;
+    void loadTexts();
   }, [open, textsLoaded, loadTexts]);
 
-  const candidates = projectId
-    ? texts.filter((t) => t.projectId === projectId)
-    : texts;
+  // Already-attached texts always stay listed, even when the picker is
+  // scoped to a project they do not belong to — otherwise the attachment
+  // would look like it vanished and could not be unchecked here.
+  const attachedNow = new Set(selectedIds);
+  const candidates = texts.filter(
+    (t) => (projectId ? t.projectId === projectId : true) || attachedNow.has(t.id),
+  );
   const filtered = candidates.filter((t) =>
     search.trim()
       ? t.title.toLowerCase().includes(search.trim().toLowerCase())
@@ -67,10 +78,10 @@ export default function AttachmentPicker({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Attach library texts</DialogTitle>
+          <DialogTitle>Attach documents</DialogTitle>
           <DialogDescription>
-            Attached texts are included in the next message only — the chat
-            never reads your library unless you attach it here.
+            Attached documents are included in the next message only — the
+            chat never reads your library unless you attach it here.
           </DialogDescription>
         </DialogHeader>
 
@@ -89,8 +100,8 @@ export default function AttachmentPicker({
           {textsLoaded && candidates.length === 0 ? (
             <p className="text-sm text-text-muted px-4 py-6 text-center">
               {projectId
-                ? "This project has no texts yet. Write the first one from the project page."
-                : "Your library is empty. Save texts from the chat or add them in the Library tab first."}
+                ? "This project has no documents yet. Write the first one from the project page."
+                : "Your library is empty. Save documents from the chat or add them in the library first."}
             </p>
           ) : (
             filtered.map((t) => (
