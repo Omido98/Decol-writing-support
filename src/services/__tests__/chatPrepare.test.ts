@@ -293,6 +293,33 @@ describe("prepared request (B14)", () => {
     ).toBe(true);
   });
 
+  it("a first send from an empty thread carries attached library texts", async () => {
+    // The start panels attach BEFORE any message exists: the fresh send
+    // with zero history must still compile the attachment into the
+    // system prompt and consume it.
+    setChat([]);
+    useChatStore.setState({
+      threadAttachments: {
+        th1: {
+          library: [
+            {
+              id: "doc1",
+              title: "Field notes",
+              textType: "other",
+              content: "ATTACHED LIBRARY TEXT",
+            },
+          ],
+          files: [],
+        },
+      },
+    });
+
+    const prepared = await prepareChatRequest({ kind: "fresh", text: "start" });
+    expect(prepared!.history).toEqual([]);
+    expect(prepared!.systemPrompt).toContain("ATTACHED LIBRARY TEXT");
+    expect(prepared!.consumedAttachments.library).toEqual(["doc1"]);
+  });
+
   it("a changed project brief is part of the prepared system prompt", async () => {
     fakeRepoState.projects.set("p1", {
       meta: projectMeta,

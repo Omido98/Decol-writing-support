@@ -1,12 +1,13 @@
 import { useEffect, useRef, useCallback, type ChangeEvent, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { BookMarked, FileText, FolderOpen, Globe, Loader2, Paperclip, Send, Square, Telescope, X } from "lucide-react";
+import { BookMarked, FolderOpen, Loader2, Paperclip, Send, Square, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTokenEstimate, TOKEN_WARN_THRESHOLD } from "@/utils/tokens";
 import { UPLOAD_ACCEPT } from "@/utils/fileParse";
 import type { AttachedLibraryText } from "@/types";
 import type { FileAttachment } from "@/stores/chatStore";
-import { textTypeLabel } from "@/types";
+import AttachmentChips from "@/components/chat/AttachmentChips";
+import AgentToggles from "@/components/chat/AgentToggles";
 
 interface MessageInputProps {
   value: string;
@@ -124,60 +125,13 @@ export default function MessageInput({
       {/* Agent toggles + project brief toggle + attached contexts */}
       {hasChips && (
         <div className="flex items-center gap-1.5 px-4 pt-3 flex-wrap">
-          {onToggleWebSearch && (
-            <button
-              type="button"
-              onClick={onToggleWebSearch}
-              disabled={disabled}
-              aria-pressed={webSearchEnabled}
-              title={
-                webSearchEnabled
-                  ? "Web search is ON: the agent may search the web and fetch pages to check facts. Click to turn it off."
-                  : "Web search is OFF: the agent answers without web tools. Click to turn it on (one search and up to 5 pages per turn)."
-              }
-              className={cn(
-                "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors disabled:opacity-50",
-                webSearchEnabled
-                  ? "bg-primary/10 border-primary/40 text-text-primary"
-                  : "bg-surface border-border text-text-muted",
-              )}
-            >
-              <Globe
-                className={cn(
-                  "size-3 shrink-0",
-                  webSearchEnabled ? "text-primary" : "text-text-muted",
-                )}
-              />
-              Web search
-            </button>
-          )}
-          {onToggleDeepResearch && (
-            <button
-              type="button"
-              onClick={onToggleDeepResearch}
-              disabled={disabled}
-              aria-pressed={deepResearchEnabled}
-              title={
-                deepResearchEnabled
-                  ? "Deep research is ON: multiple searches and many page fetches until key claims are verified (slower, more tokens). Click to turn it off."
-                  : "Deep research is OFF. Click to research thoroughly: multiple searches with varied queries and many page fetches. Needs web search."
-              }
-              className={cn(
-                "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors disabled:opacity-50",
-                deepResearchEnabled
-                  ? "bg-primary/10 border-primary/40 text-text-primary"
-                  : "bg-surface border-border text-text-muted",
-              )}
-            >
-              <Telescope
-                className={cn(
-                  "size-3 shrink-0",
-                  deepResearchEnabled ? "text-primary" : "text-text-muted",
-                )}
-              />
-              Deep research
-            </button>
-          )}
+          <AgentToggles
+            webSearchEnabled={webSearchEnabled}
+            deepResearchEnabled={deepResearchEnabled}
+            onToggleWebSearch={onToggleWebSearch}
+            onToggleDeepResearch={onToggleDeepResearch}
+            disabled={disabled}
+          />
           {projectTitle != null && onToggleProjectBrief && (
             <button
               type="button"
@@ -205,56 +159,12 @@ export default function MessageInput({
               {!projectBriefIncluded && <X className="size-3 shrink-0" />}
             </button>
           )}
-          {attachedTexts.map((t) => (
-            <span
-              key={t.id}
-              className="flex items-center gap-1.5 rounded-full bg-surface border border-border pl-2.5 pr-1 py-1 text-xs text-text-secondary max-w-[280px]"
-            >
-              <BookMarked className="size-3 shrink-0 text-primary" />
-              <span className="truncate text-text-primary" title={t.title}>
-                {t.title}
-              </span>
-              <span className="shrink-0 text-text-muted">
-                {textTypeLabel(t.textType)}
-              </span>
-              {onRemoveAttachment && (
-                <button
-                  type="button"
-                  onClick={() => onRemoveAttachment(t.id)}
-                  className="shrink-0 rounded-full p-0.5 hover:bg-border transition-colors"
-                  title={`Detach ${t.title}`}
-                  aria-label={`Detach ${t.title}`}
-                >
-                  <X className="size-3" />
-                </button>
-              )}
-            </span>
-          ))}
-          {fileAttachments.map((f) => (
-            <span
-              key={f.name}
-              className="flex items-center gap-1.5 rounded-full bg-surface border border-border pl-2.5 pr-1 py-1 text-xs text-text-secondary max-w-[280px]"
-            >
-              <FileText className="size-3 shrink-0 text-primary" />
-              <span className="truncate text-text-primary" title={f.name}>
-                {f.name}
-              </span>
-              <span className="shrink-0 text-text-muted">
-                {(f.wordCount ?? 0).toLocaleString()} words
-              </span>
-              {onRemoveFileAttachment && (
-                <button
-                  type="button"
-                  onClick={() => onRemoveFileAttachment(f.name)}
-                  className="shrink-0 rounded-full p-0.5 hover:bg-border transition-colors"
-                  title={`Remove ${f.name}`}
-                  aria-label={`Remove ${f.name}`}
-                >
-                  <X className="size-3" />
-                </button>
-              )}
-            </span>
-          ))}
+          <AttachmentChips
+            attachedTexts={attachedTexts}
+            onRemoveAttachment={onRemoveAttachment}
+            fileAttachments={fileAttachments}
+            onRemoveFileAttachment={onRemoveFileAttachment}
+          />
         </div>
       )}
 
