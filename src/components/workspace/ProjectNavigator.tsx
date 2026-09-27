@@ -12,6 +12,7 @@ import {
   FolderOpen,
   FolderPlus,
   MessageSquarePlus,
+  MoreHorizontal,
   Notebook,
   Pencil,
   Pin,
@@ -24,6 +25,20 @@ import { useChatStore } from "@/stores/chatStore";
 import { useFolderStore } from "@/stores/folderStore";
 import { useThreadFailedSends } from "@/components/chat/useThreadOperation";
 import RenameThreadDialog from "@/components/chat/RenameThreadDialog";
+import MoveToFolderDialog from "@/components/library/MoveToFolderDialog";
+import MoveToProjectDialog from "@/components/library/MoveToProjectDialog";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "@/components/ui/menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -214,6 +229,7 @@ export default function ProjectNavigator() {
   const openText = useAppStore((s) => s.openText);
   const openDiscussion = useAppStore((s) => s.openDiscussion);
   const setActionError = useAppStore((s) => s.setActionError);
+  const chatAboutText = useAppStore((s) => s.chatAboutText);
 
   const texts = useLibraryStore((s) => s.texts);
   const createText = useLibraryStore((s) => s.createText);
@@ -272,7 +288,13 @@ export default function ProjectNavigator() {
     folder?: string;
     scope: string;
   } | null>(null);
-  const [moveFolder, setMoveFolder] = useState("");
+
+  // ── Move-to-project dialog (texts) ──
+  const [moveProjectTarget, setMoveProjectTarget] = useState<{
+    id: string;
+    title: string;
+    projectId?: string;
+  } | null>(null);
 
   const projectIds = useMemo(
     () => new Set(projects.map((p) => p.id)),
@@ -438,7 +460,6 @@ export default function ProjectNavigator() {
     item: { id: string; title: string; folder?: string },
     scope: string,
   ) => {
-    setMoveFolder(item.folder ?? "");
     setMoveTarget({
       kind,
       id: item.id,
@@ -448,16 +469,13 @@ export default function ProjectNavigator() {
     });
   };
 
-  /** `null` removes the item from its folder; otherwise the typed name
-   * applies (empty = no folder). */
-  const submitMove = async (folderOverride?: string | null) => {
+  /** Called by the folder picker: `null` removes the item from its folder. */
+  const submitMove = async (folder: string | null) => {
     if (!moveTarget) return;
-    const folder =
-      folderOverride === null ? "" : (folderOverride ?? moveFolder).trim();
     try {
       await moveItem(
         { kind: moveTarget.kind, id: moveTarget.id, scope: moveTarget.scope },
-        folder || null,
+        folder,
       );
     } catch (err) {
       setActionError(
@@ -467,7 +485,21 @@ export default function ProjectNavigator() {
       );
     }
     setMoveTarget(null);
-    setMoveFolder("");
+  };
+
+  /** Called by the project picker: `null` makes the text standalone. */
+  const submitMoveProject = async (projectId: string | null) => {
+    if (!moveProjectTarget) return;
+    try {
+      await updateText(moveProjectTarget.id, { projectId: projectId ?? "" });
+    } catch (err) {
+      setActionError(
+        `Could not move the document: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    setMoveProjectTarget(null);
   };
 
   // ── Drag & drop handlers ──
@@ -571,100 +603,189 @@ export default function ProjectNavigator() {
   const activeThreadId =
     view.kind === "discussion" ? (view.id ?? null) : null;
 
-  /** The folder names offered by the move dialog for one area. */
-  const folderNamesFor = (scope: string): string[] =>
-    folderGroupsFor(
-      registryFolders,
-      scope,
-      texts.filter((t) => scopeOf(t.projectId) === scope),
-      threads.filter((t) => scopeOf(t.projectId) === scope),
-    ).map((g) => g.name);
+  /** Item actions, shared by the row "…" menu and the right-click menu. */
+  const textMenuItems = (t: LibraryTextMeta, scope: string) => (
+    <>
+      <MenuItem onClick={() => openText(t.id)}>
+        <BookMarked />
+        Open
+      </MenuItem>
+      <MenuItem onClick={() => setView({ kind: "edit", id: t.id })}>
+        <Pencil />
+        Edit
+      </MenuItem>
+      <MenuItem onClick={() => void chatAboutText(t.id)}>
+        <MessageSquarePlus />
+        Chat about this
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem onClick={() => openMoveDialog("text", t, scope)}>
+        <FolderInput />
+        Move to folder…
+      </MenuItem>
+      <MenuItem
+        onClick={() =>
+          setMoveProjectTarget({
+            id: t.id,
+            title: t.title,
+            ...(t.projectId ? { projectId: t.projectId } : {}),
+          })
+        }
+      >
+        <FolderOpen />
+        Move to project…
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem onClick={() => void setTextState(t.id, { pinned: !t.pinned })}>
+        <Pin />
+        {t.pinned ? "Unpin" : "Pin"}
+      </MenuItem>
+      <MenuItem onClick={() => void setTextState(t.id, { archived: true })}>
+        <Archive />
+        Archive
+      </MenuItem>
+    </>
+  );
+
+  const threadMenuItems = (t: ThreadMeta, scope: string) => (
+    <>
+      <MenuItem onClick={() => openDiscussion(t.id)}>
+        <FolderOpen />
+        Open
+      </MenuItem>
+      <MenuItem onClick={() => setRenaming({ id: t.id, title: t.title })}>
+        <Pencil />
+        Rename
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem onClick={() => openMoveDialog("thread", t, scope)}>
+        <FolderInput />
+        Move to folder…
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem
+        onClick={() => void setThreadState(t.id, { pinned: !t.pinned })}
+      >
+        <Pin />
+        {t.pinned ? "Unpin" : "Pin"}
+      </MenuItem>
+      <MenuItem onClick={() => void setThreadState(t.id, { archived: true })}>
+        <Archive />
+        Archive
+      </MenuItem>
+    </>
+  );
+
+  const rowActionsMenu = (label: string, items: ReactNode) => (
+    <Menu>
+      <MenuTrigger
+        className="shrink-0 rounded p-0.5 text-text-muted hover:bg-border hover:text-text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        aria-label={label}
+        title="More actions"
+      >
+        <MoreHorizontal className="size-3.5" />
+      </MenuTrigger>
+      <MenuContent>{items}</MenuContent>
+    </Menu>
+  );
 
   const renderTextRow = (t: LibraryTextMeta, scope: string) => (
-    <div
-      key={t.id}
-      draggable
-      onDragStart={beginDrag({
-        kind: "text",
-        id: t.id,
-        scope,
-        ...(t.folder ? { folder: t.folder } : {}),
-      })}
-      onDragEnd={endDrag}
-      className={`${rowClass(activeTextId === t.id)} group`}
-    >
-      <button
-        type="button"
-        className="flex-1 flex items-center gap-2 min-w-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-        aria-current={activeTextId === t.id ? "true" : undefined}
-        onClick={() => openText(t.id)}
-        title={t.title}
+    <ContextMenu key={t.id}>
+      <ContextMenuTrigger
+        draggable
+        onDragStart={beginDrag({
+          kind: "text",
+          id: t.id,
+          scope,
+          ...(t.folder ? { folder: t.folder } : {}),
+        })}
+        onDragEnd={endDrag}
+        className={`${rowClass(activeTextId === t.id)} group`}
       >
-        <BookMarked className="size-3.5 shrink-0" />
-        <span className="truncate">{t.title}</span>
-      </button>
-      <RowFlagActions
-        pinned={!!t.pinned}
-        label={`document ${t.title}`}
-        onTogglePin={() => void setTextState(t.id, { pinned: !t.pinned })}
-        onArchive={() => void setTextState(t.id, { archived: true })}
-      />
-      <RowAction
-        label={`Move document ${t.title} to a folder`}
-        title={t.folder ? `In folder “${t.folder}” — move` : "Move to folder"}
-        onClick={() => openMoveDialog("text", t, scope)}
-        icon={
-          <FolderInput className={`size-3 ${t.folder ? "text-primary" : ""}`} />
-        }
-      />
-    </div>
+        <button
+          type="button"
+          className="flex-1 flex items-center gap-2 min-w-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          aria-current={activeTextId === t.id ? "true" : undefined}
+          onClick={() => openText(t.id)}
+          title={t.title}
+        >
+          <BookMarked className="size-3.5 shrink-0" />
+          <span className="truncate">{t.title}</span>
+        </button>
+        <RowFlagActions
+          pinned={!!t.pinned}
+          label={`document ${t.title}`}
+          onTogglePin={() => void setTextState(t.id, { pinned: !t.pinned })}
+          onArchive={() => void setTextState(t.id, { archived: true })}
+        />
+        <RowAction
+          label={`Move document ${t.title} to a folder`}
+          title={t.folder ? `In folder “${t.folder}” — move` : "Move to folder"}
+          onClick={() => openMoveDialog("text", t, scope)}
+          icon={
+            <FolderInput className={`size-3 ${t.folder ? "text-primary" : ""}`} />
+          }
+        />
+        {rowActionsMenu(
+          `Actions for document ${t.title}`,
+          textMenuItems(t, scope),
+        )}
+      </ContextMenuTrigger>
+      <ContextMenuContent>{textMenuItems(t, scope)}</ContextMenuContent>
+    </ContextMenu>
   );
 
   const renderThreadRow = (t: ThreadMeta, scope: string) => (
-    <div
-      key={t.id}
-      draggable
-      onDragStart={beginDrag({
-        kind: "thread",
-        id: t.id,
-        scope,
-        ...(t.folder ? { folder: t.folder } : {}),
-      })}
-      onDragEnd={endDrag}
-      className={`${rowClass(activeThreadId === t.id)} group`}
-    >
-      <button
-        type="button"
-        className="flex-1 flex items-center gap-2 min-w-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-        aria-current={activeThreadId === t.id ? "true" : undefined}
-        onClick={() => openDiscussion(t.id)}
-        title={t.title}
+    <ContextMenu key={t.id}>
+      <ContextMenuTrigger
+        draggable
+        onDragStart={beginDrag({
+          kind: "thread",
+          id: t.id,
+          scope,
+          ...(t.folder ? { folder: t.folder } : {}),
+        })}
+        onDragEnd={endDrag}
+        className={`${rowClass(activeThreadId === t.id)} group`}
       >
-        <FolderOpen className="size-3.5 shrink-0" />
-        <span className="truncate">{t.title}</span>
-        <ThreadFailureBadge threadId={t.id} />
-      </button>
-      <RowFlagActions
-        pinned={!!t.pinned}
-        label={`conversation ${t.title}`}
-        onTogglePin={() => void setThreadState(t.id, { pinned: !t.pinned })}
-        onArchive={() => void setThreadState(t.id, { archived: true })}
-      />
-      <RowAction
-        label={`Move conversation ${t.title} to a folder`}
-        title={t.folder ? `In folder “${t.folder}” — move` : "Move to folder"}
-        onClick={() => openMoveDialog("thread", t, scope)}
-        icon={
-          <FolderInput className={`size-3 ${t.folder ? "text-primary" : ""}`} />
-        }
-      />
-      <RowAction
-        label={`Rename conversation ${t.title}`}
-        title="Rename"
-        onClick={() => setRenaming({ id: t.id, title: t.title })}
-        icon={<Pencil className="size-3" />}
-      />
-    </div>
+        <button
+          type="button"
+          className="flex-1 flex items-center gap-2 min-w-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          aria-current={activeThreadId === t.id ? "true" : undefined}
+          onClick={() => openDiscussion(t.id)}
+          title={t.title}
+        >
+          <FolderOpen className="size-3.5 shrink-0" />
+          <span className="truncate">{t.title}</span>
+          <ThreadFailureBadge threadId={t.id} />
+        </button>
+        <RowFlagActions
+          pinned={!!t.pinned}
+          label={`conversation ${t.title}`}
+          onTogglePin={() => void setThreadState(t.id, { pinned: !t.pinned })}
+          onArchive={() => void setThreadState(t.id, { archived: true })}
+        />
+        <RowAction
+          label={`Move conversation ${t.title} to a folder`}
+          title={t.folder ? `In folder “${t.folder}” — move` : "Move to folder"}
+          onClick={() => openMoveDialog("thread", t, scope)}
+          icon={
+            <FolderInput className={`size-3 ${t.folder ? "text-primary" : ""}`} />
+          }
+        />
+        <RowAction
+          label={`Rename conversation ${t.title}`}
+          title="Rename"
+          onClick={() => setRenaming({ id: t.id, title: t.title })}
+          icon={<Pencil className="size-3" />}
+        />
+        {rowActionsMenu(
+          `Actions for conversation ${t.title}`,
+          threadMenuItems(t, scope),
+        )}
+      </ContextMenuTrigger>
+      <ContextMenuContent>{threadMenuItems(t, scope)}</ContextMenuContent>
+    </ContextMenu>
   );
 
   /** The "drag out of the folder" strip, visible only while dragging an
@@ -1201,62 +1322,27 @@ export default function ProjectNavigator() {
       </Dialog>
 
       {/* Move an item into a folder (keyboard-accessible path) */}
-      <Dialog
+      <MoveToFolderDialog
         open={moveTarget !== null}
         onOpenChange={(o) => {
-          if (!o) {
-            setMoveTarget(null);
-            setMoveFolder("");
-          }
+          if (!o) setMoveTarget(null);
         }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Move to folder</DialogTitle>
-            <DialogDescription>
-              “{moveTarget?.title}” moves to the folder. Leave the name empty
-              to remove it from its folder.
-            </DialogDescription>
-          </DialogHeader>
-          <Input
-            value={moveFolder}
-            onChange={(e) => setMoveFolder(e.target.value)}
-            placeholder="Folder name…"
-            list="navigator-folders"
-            aria-label="Folder name"
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void submitMove();
-            }}
-          />
-          <datalist id="navigator-folders">
-            {(moveTarget ? folderNamesFor(moveTarget.scope) : []).map((f) => (
-              <option key={f} value={f} />
-            ))}
-          </datalist>
-          <DialogFooter>
-            {moveTarget?.folder && (
-              <Button variant="ghost" onClick={() => void submitMove(null)}>
-                Remove from folder
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              onClick={() => {
-                setMoveTarget(null);
-                setMoveFolder("");
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              className="bg-primary hover:bg-primary/80 text-primary-foreground"
-              onClick={() => void submitMove()}
-            >
-              Move
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        scope={moveTarget?.scope ?? ""}
+        currentFolder={moveTarget?.folder}
+        itemLabel={moveTarget?.title}
+        onMove={submitMove}
+      />
+
+      {/* Move a document into a project (or make it standalone) */}
+      <MoveToProjectDialog
+        open={moveProjectTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setMoveProjectTarget(null);
+        }}
+        currentProjectId={moveProjectTarget?.projectId}
+        itemLabel={moveProjectTarget?.title}
+        onMove={submitMoveProject}
+      />
 
       {/* Rename conversation (shared with the in-chat title action) */}
       <RenameThreadDialog

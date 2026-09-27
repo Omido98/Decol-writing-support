@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { getPref, setPref } from "@/utils/preferences";
 import { useChatStore } from "@/stores/chatStore";
+import { useLibraryStore } from "@/stores/libraryStore";
 import type { CslStyleId } from "@/utils/cslProcessor";
 
 /**
@@ -84,6 +85,12 @@ interface AppState extends ShellState {
   }) => void;
   /** Open a conversation; loads its thread when the id is known. */
   openDiscussion: (id: string | null) => void;
+  /**
+   * Start a NEW conversation about a library document: the thread is linked
+   * to the document's project (when it has one), named after the document,
+   * and the document is pre-attached to its first send.
+   */
+  chatAboutText: (textId: string) => Promise<void>;
 
   setInspectorView: (view: InspectorView) => void;
   toggleNavigator: () => void;
@@ -229,6 +236,37 @@ export const useAppStore = create<AppState>((set, get) => ({
           .catch(reportFailure);
       })
       .catch(reportFailure);
+  },
+
+  chatAboutText: async (textId) => {
+    try {
+      const library = useLibraryStore.getState();
+      if (!library.textsLoaded) await library.loadTexts();
+      const meta = useLibraryStore
+        .getState()
+        .texts.find((t) => t.id === textId);
+      if (!meta) {
+        get().setActionError("That document no longer exists.");
+        return;
+      }
+      // A fresh conversation, linked to the document's project when it has
+      // one, so the project brief and sources scope apply to the discussion.
+      const threadId = await useChatStore.getState().createThread();
+      if (meta.projectId) {
+        await useChatStore.getState().setThreadMode("text", meta.projectId);
+      }
+      await useChatStore.getState().renameThread(threadId, meta.title);
+      // The handoff lands in the conversation's composer: the document is
+      // attached to the next send (the user still writes the message).
+      useLibraryStore.getState().requestAttach(textId);
+      get().openDiscussion(threadId);
+    } catch (err) {
+      get().setActionError(
+        `Could not start a conversation about the document: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   },
 
   setInspectorView: (inspectorView) => {

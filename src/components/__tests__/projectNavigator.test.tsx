@@ -136,13 +136,27 @@ describe("ProjectNavigator folders", () => {
         name: /Move conversation Loose notes to a folder/i,
       }),
     );
-    fireEvent.change(screen.getByLabelText("Folder name"), {
+    // Creating a folder by typing its name picks the New-folder option.
+    fireEvent.change(screen.getByLabelText("New folder name"), {
       target: { value: "Drafts" },
     });
     fireEvent.click(screen.getByRole("button", { name: /^Move$/ }));
 
     await waitFor(() =>
       expect(fakeRepoState.threads.get("c-a")?.meta.folder).toBe("Drafts"),
+    );
+
+    // The picker LISTS existing folders: a second move picks one instead
+    // of typing its name.
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Move conversation Archive search to a folder/i,
+      }),
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /Drafts/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Move$/ }));
+    await waitFor(() =>
+      expect(fakeRepoState.threads.get("c-c")?.meta.folder).toBe("Drafts"),
     );
   });
 

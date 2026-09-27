@@ -5,6 +5,8 @@ import { useFolderStore } from "@/stores/folderStore";
 import { exportTexts, importFiles } from "@/utils/libraryIo";
 import { markdownFromRich } from "@/utils/richMarkdown";
 import { textTypeLabel, type LibraryTextMeta } from "@/types";
+import MoveToFolderDialog from "@/components/library/MoveToFolderDialog";
+import MoveToProjectDialog from "@/components/library/MoveToProjectDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -111,9 +113,7 @@ export default function LibraryList({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
-  const [moveFolder, setMoveFolder] = useState("");
   const [projectOpen, setProjectOpen] = useState(false);
-  const [projectTarget, setProjectTarget] = useState<string>("standalone");
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
   const [newProjectTitle, setNewProjectTitle] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
@@ -256,23 +256,37 @@ export default function LibraryList({
     exitSelection();
   };
 
-  const handleMoveSelected = async () => {
-    const folder = moveFolder.trim();
+  /** The selected texts’ common scope: a shared project id, else standalone. */
+  const selectedCommonProject = (() => {
+    const metas = [...selected]
+      .map((id) => texts.find((t) => t.id === id))
+      .filter((t): t is LibraryTextMeta => !!t);
+    if (metas.length === 0) return "";
+    const first = metas[0].projectId ?? "";
+    return metas.every((t) => (t.projectId ?? "") === first) ? first : "";
+  })();
+
+  /** The one selected text, when the selection is a single document. */
+  const singleSelected =
+    selected.size === 1
+      ? texts.find((t) => selected.has(t.id))
+      : undefined;
+  /** The folder to seed the picker with: only meaningful for one text. */
+  const selectedFolder = singleSelected?.folder;
+
+  const handleMoveSelected = async (folder: string | null) => {
     for (const id of selected) {
-      await useLibraryStore.getState().updateText(id, { folder });
+      await useLibraryStore.getState().updateText(id, { folder: folder ?? "" });
     }
-    setMoveOpen(false);
-    setMoveFolder("");
     exitSelection();
   };
 
-  const handleProjectSelected = async () => {
+  const handleProjectSelected = async (projectId: string | null) => {
     for (const id of selected) {
       await useLibraryStore
         .getState()
-        .updateText(id, { projectId: projectTarget === "standalone" ? "" : projectTarget });
+        .updateText(id, { projectId: projectId ?? "" });
     }
-    setProjectOpen(false);
     exitSelection();
   };
 
@@ -330,7 +344,7 @@ export default function LibraryList({
             onClick={() => void handleNew()}
           >
             <BookPlus className="size-4 mr-1" />
-            New text
+            New document
           </Button>
         </div>
       </div>
@@ -414,13 +428,7 @@ export default function LibraryList({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => {
-              const first = [...selected]
-                .map((id) => texts.find((t) => t.id === id))
-                .find((t) => !!t);
-              setProjectTarget(first?.projectId ?? "standalone");
-              setProjectOpen(true);
-            }}
+            onClick={() => setProjectOpen(true)}
           >
             <FolderOpen className="size-4 mr-1" />
             Project
@@ -506,11 +514,11 @@ export default function LibraryList({
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <p className="text-text-primary text-lg font-semibold">
-              {texts.length === 0 ? "Your library is empty" : "No texts match"}
+              {texts.length === 0 ? "Your library is empty" : "No documents match"}
             </p>
             <p className="text-text-muted text-sm mt-2 max-w-md">
               {texts.length === 0
-                ? "Save a text from the chat with the bookmark button, paste one in with New text, or import a file."
+                ? "Save a document from the chat with the bookmark button, paste one in with New document, or import a file."
                 : "Try a different search, type, project, or folder filter."}
             </p>
           </div>
@@ -602,41 +610,17 @@ export default function LibraryList({
         </DialogContent>
       </Dialog>
 
-      {/* Move to folder */}
-      <Dialog open={moveOpen} onOpenChange={setMoveOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Move to folder</DialogTitle>
-            <DialogDescription>
-              One level of organization. Leave empty to remove the selected
-              text{selected.size === 1 ? "" : "s"} from any folder.
-            </DialogDescription>
-          </DialogHeader>
-          <Input
-            value={moveFolder}
-            onChange={(e) => setMoveFolder(e.target.value)}
-            placeholder="Folder name…"
-            list="library-folders"
-            className="bg-field"
-          />
-          <datalist id="library-folders">
-            {folders.map((f) => (
-              <option key={f} value={f} />
-            ))}
-          </datalist>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setMoveOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              className="bg-primary hover:bg-primary/80 text-primary-foreground"
-              onClick={() => void handleMoveSelected()}
-            >
-              Move
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Move to folder (existing folders are listed, not typed) */}
+      <MoveToFolderDialog
+        open={moveOpen}
+        onOpenChange={setMoveOpen}
+        scope={selectedCommonProject}
+        currentFolder={selectedFolder}
+        itemLabel={
+          singleSelected?.title ?? `${selected.size} documents`
+        }
+        onMove={handleMoveSelected}
+      />
 
       {/* Create project */}
       <Dialog open={createProjectOpen} onOpenChange={setCreateProjectOpen}>
@@ -691,46 +675,14 @@ export default function LibraryList({
         </DialogContent>
       </Dialog>
 
-      {/* Assign to project */}
-      <Dialog open={projectOpen} onOpenChange={setProjectOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Project membership</DialogTitle>
-            <DialogDescription>
-              Move the selected text
-              {selected.size === 1 ? "" : "s"} into a project, or make them
-              standalone. Project texts build on their project&apos;s brief.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-1.5">
-            <Label htmlFor="project-target">Project</Label>
-            <Select value={projectTarget} onValueChange={(v) => setProjectTarget(v ?? "standalone")}>
-              <SelectTrigger id="project-target" className="w-full bg-field">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="standalone">Standalone (no project)</SelectItem>
-                {projects.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    <span className="truncate max-w-[320px] block">{p.title}</span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setProjectOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              className="bg-primary hover:bg-primary/80 text-primary-foreground"
-              onClick={() => void handleProjectSelected()}
-            >
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Move to a project (or make standalone) */}
+      <MoveToProjectDialog
+        open={projectOpen}
+        onOpenChange={setProjectOpen}
+        currentProjectId={selectedCommonProject || undefined}
+        itemLabel={singleSelected?.title ?? `${selected.size} documents`}
+        onMove={handleProjectSelected}
+      />
     </div>
   );
 }

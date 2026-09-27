@@ -348,6 +348,40 @@ describe("thread persistence", () => {
     ).toEqual(["other.txt"]);
   });
 
+  it("functional attachment updates never lose concurrent async adds", async () => {
+    await useChatStore.getState().loadThreads();
+    const threadId = useChatStore.getState().activeThreadId!;
+    const libraryAttachment = (id: string) => ({
+      id,
+      title: `Text ${id}`,
+      textType: "other" as const,
+      content: `body ${id}`,
+    });
+    // Two content loads resolving in any order: each write computes from
+    // the CURRENT stored slot, so neither add overwrites the other.
+    useChatStore.getState().updateThreadAttachments(threadId, (prev) => ({
+      ...prev,
+      library: [...prev.library, libraryAttachment("b")],
+    }));
+    useChatStore.getState().updateThreadAttachments(threadId, (prev) => ({
+      ...prev,
+      library: [...prev.library, libraryAttachment("a")],
+    }));
+    expect(
+      useChatStore
+        .getState()
+        .getThreadAttachments(threadId)
+        .library.map((a) => a.id),
+    ).toEqual(["b", "a"]);
+
+    // An updater returning the same slot is a true no-op.
+    const before = useChatStore.getState().threadAttachments;
+    useChatStore
+      .getState()
+      .updateThreadAttachments(threadId, (prev) => prev);
+    expect(useChatStore.getState().threadAttachments).toBe(before);
+  });
+
   it("loads messages and the stored brief for the active thread", async () => {
     const now = "2026-01-01T00:00:00.000Z";
     fakeRepoState.threads.set("app-2", {

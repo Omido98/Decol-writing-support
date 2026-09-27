@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useProjectStore } from "@/stores/projectStore";
+import { useAppStore } from "@/stores/useAppStore";
+import MoveToFolderDialog from "@/components/library/MoveToFolderDialog";
+import MoveToProjectDialog from "@/components/library/MoveToProjectDialog";
 import { wordCount } from "@/utils/tokens";
 import {
   AUDIENCES,
@@ -12,6 +15,7 @@ import {
   toneLabel,
   type AudienceId,
   type CitationId,
+  type LibraryTextMeta,
   type ToneId,
 } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -37,6 +41,8 @@ import {
   ArrowLeft,
   BookPlus,
   FolderInput,
+  FolderOpen,
+  MessageSquarePlus,
   Notebook,
   Pencil,
   Trash2,
@@ -69,12 +75,21 @@ export default function ProjectDetail({
   const updateProject = useProjectStore((s) => s.updateProject);
   const deleteProject = useProjectStore((s) => s.deleteProject);
   const texts = useLibraryStore((s) => s.texts);
+  const updateText = useLibraryStore((s) => s.updateText);
+  const chatAboutText = useAppStore((s) => s.chatAboutText);
 
   // The overview only SUMMARISES the brief (word count); the full brief
   // lives in its own view. Content is cached, so the count is cheap.
   const [briefContent, setBriefContent] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  /** Card whose folder/project the user is changing. */
+  const [moveFolderText, setMoveFolderText] = useState<LibraryTextMeta | null>(
+    null,
+  );
+  const [moveProjectText, setMoveProjectText] = useState<LibraryTextMeta | null>(
+    null,
+  );
 
   // Edit dialog fields
   const [title, setTitle] = useState("");
@@ -150,6 +165,18 @@ export default function ProjectDetail({
     onBack();
   };
 
+  const handleMoveToFolder = async (folder: string | null) => {
+    if (!moveFolderText) return;
+    await updateText(moveFolderText.id, { folder: folder ?? "" });
+    setMoveFolderText(null);
+  };
+
+  const handleMoveToProject = async (projectId: string | null) => {
+    if (!moveProjectText) return;
+    await updateText(moveProjectText.id, { projectId: projectId ?? "" });
+    setMoveProjectText(null);
+  };
+
   const defaultsLine = [
     project.defaultAudience ? audienceLabel(project.defaultAudience) : null,
     project.defaultTone ? toneLabel(project.defaultTone) : null,
@@ -183,7 +210,7 @@ export default function ProjectDetail({
             onClick={() => onNewText(id)}
           >
             <BookPlus className="size-4 mr-1" />
-            New text in project
+            New document in project
           </Button>
           <Button
             variant="ghost"
@@ -244,12 +271,12 @@ export default function ProjectDetail({
           {/* Texts of the project */}
           <section className="space-y-2">
             <h2 className="text-sm font-semibold text-text-primary">
-              Texts ({memberTexts.length})
+              Documents ({memberTexts.length})
             </h2>
             {memberTexts.length === 0 ? (
               <p className="text-sm text-text-muted">
-                No texts in this project yet. Use “New text in project” or
-                move an existing text here from the library.
+                No documents in this project yet. Use “New document in
+                project” or move an existing document here from the library.
               </p>
             ) : (
               <div className="grid gap-2">
@@ -280,18 +307,56 @@ export default function ProjectDetail({
                     <span className="shrink-0 text-[11px] text-text-muted select-none">
                       {t.wordCount ?? 0} words · {formatDate(t.updatedAt)}
                     </span>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onEditText(t.id);
-                      }}
-                      className="shrink-0 rounded p-1 hover:bg-border transition-colors"
-                      title={`Edit ${t.title}`}
-                      aria-label={`Edit ${t.title}`}
-                    >
-                      <Pencil className="size-3.5 text-text-secondary" />
-                    </button>
+                    <div className="shrink-0 flex items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void chatAboutText(t.id);
+                        }}
+                        className="rounded p-1 hover:bg-border transition-colors"
+                        title={`Chat about ${t.title}`}
+                        aria-label={`Chat about ${t.title}`}
+                      >
+                        <MessageSquarePlus className="size-3.5 text-text-secondary" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMoveFolderText(t);
+                        }}
+                        className="rounded p-1 hover:bg-border transition-colors"
+                        title={`Move ${t.title} to a folder`}
+                        aria-label={`Move ${t.title} to a folder`}
+                      >
+                        <FolderInput className="size-3.5 text-text-secondary" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMoveProjectText(t);
+                        }}
+                        className="rounded p-1 hover:bg-border transition-colors"
+                        title={`Move ${t.title} to another project`}
+                        aria-label={`Move ${t.title} to another project`}
+                      >
+                        <FolderOpen className="size-3.5 text-text-secondary" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEditText(t.id);
+                        }}
+                        className="rounded p-1 hover:bg-border transition-colors"
+                        title={`Edit ${t.title}`}
+                        aria-label={`Edit ${t.title}`}
+                      >
+                        <Pencil className="size-3.5 text-text-secondary" />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -444,6 +509,29 @@ export default function ProjectDetail({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Move a project text to a folder (folders of this project) */}
+      <MoveToFolderDialog
+        open={moveFolderText !== null}
+        onOpenChange={(o) => {
+          if (!o) setMoveFolderText(null);
+        }}
+        scope={id}
+        currentFolder={moveFolderText?.folder}
+        itemLabel={moveFolderText?.title}
+        onMove={handleMoveToFolder}
+      />
+
+      {/* Move a project text to another project (or standalone) */}
+      <MoveToProjectDialog
+        open={moveProjectText !== null}
+        onOpenChange={(o) => {
+          if (!o) setMoveProjectText(null);
+        }}
+        currentProjectId={id}
+        itemLabel={moveProjectText?.title}
+        onMove={handleMoveToProject}
+      />
     </div>
   );
 }

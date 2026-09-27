@@ -224,7 +224,9 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
 
   // Composer attachments live PER THREAD in the store: navigating to
   // another conversation (or a parse finishing after navigation) can
-  // never migrate an attachment.
+  // never migrate an attachment. Every write is FUNCTIONAL (computed from
+  // the live stored slot), so an async content load or parse can never
+  // overwrite a stale render snapshot.
   const threadAttachments = useChatStore((s) => s.threadAttachments);
   const activeThreadIdForAttachments = useChatStore((s) => s.activeThreadId);
   const attachmentSlot =
@@ -235,28 +237,30 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
     });
   const attachments = attachmentSlot.library;
   const fileAttachments = attachmentSlot.files;
-  const setAttachments = (
-    updater:
-      | AttachedLibraryText[]
-      | ((prev: AttachedLibraryText[]) => AttachedLibraryText[]),
-  ) => {
-    if (!activeThreadIdForAttachments) return;
-    const next =
-      typeof updater === "function" ? updater(attachmentSlot.library) : updater;
-    useChatStore
-      .getState()
-      .setThreadAttachments(activeThreadIdForAttachments, { library: next });
-  };
-  const setFileAttachments = (
-    updater: FileAttachment[] | ((prev: FileAttachment[]) => FileAttachment[]),
-  ) => {
-    if (!activeThreadIdForAttachments) return;
-    const next =
-      typeof updater === "function" ? updater(attachmentSlot.files) : updater;
-    useChatStore
-      .getState()
-      .setThreadAttachments(activeThreadIdForAttachments, { files: next });
-  };
+  const updateAttachmentsFor = useCallback(
+    (
+      threadId: string,
+      updater: (prev: AttachedLibraryText[]) => AttachedLibraryText[],
+    ) => {
+      useChatStore.getState().updateThreadAttachments(threadId, (prev) => {
+        const library = updater(prev.library);
+        return library === prev.library ? prev : { ...prev, library };
+      });
+    },
+    [],
+  );
+  const updateFileAttachmentsFor = useCallback(
+    (
+      threadId: string,
+      updater: (prev: FileAttachment[]) => FileAttachment[],
+    ) => {
+      useChatStore.getState().updateThreadAttachments(threadId, (prev) => {
+        const files = updater(prev.files);
+        return files === prev.files ? prev : { ...prev, files };
+      });
+    },
+    [],
+  );
 
   const activeThread = threads.find((t) => t.id === activeThreadId) ?? null;
   const threadMode: ThreadMode = activeThread?.mode ?? "text";
@@ -278,88 +282,134 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
   // Drop attachments whose underlying text was deleted in the library.
   useEffect(() => {
     if (!libraryTextsLoaded) return;
-    setAttachments((prev) =>
+    const threadId = useChatStore.getState().activeThreadId;
+    if (!threadId) return;
+    updateAttachmentsFor(threadId, (prev) =>
       prev.filter((a) => libraryTexts.some((t) => t.id === a.id)),
     );
-  }, [libraryTexts, libraryTextsLoaded]);
+  }, [libraryTexts, libraryTextsLoaded, updateAttachmentsFor]);
 
-  /** Load and add a library text as an attachment (idempotent). */
-  const addAttachment = useCallback(async (id: string) => {
-    if (!useLibraryStore.getState().textsLoaded) {
-      await useLibraryStore.getState().loadTexts();
-    }
-    const store = useLibraryStore.getState();
-    const meta = store.texts.find((t) => t.id === id);
-    if (!meta) return;
-    // Attach the PLAIN TEXT projection — a structured payload is never
-    // sent to the model as manuscript prose.
-    const body = await store.loadTextContent(id);
-    setAttachments((prev) =>
-      prev.some((a) => a.id === id)
-        ? prev
-        : [
-            ...prev,
-            {
-              id: meta.id,
-              title: meta.title,
-              textType: meta.textType,
-              content: displayTextFromBody(body),
-            },
-          ],
-    );
-  }, []);
+  /** Load and add a library text to a conversation's next send
+   * (idempotent). The target conversation is read at CALL time and the
+   * write is functional, so an async content load can never clobber
+   * attachments added meanwhile. */
+  const addAttachment = useCallback(
+    async (id: string) => {
+      const threadId = useChatStore.getState().activeThreadId;
+      // No conversation loaded: nothing to attach to (the composer is only
+      // shown inside one).
+      if (!threadId) return;
+      if (!useLibraryStore.getState().textsLoaded) {
+        await useLibraryStore.getState().loadTexts();
+      }
+      const store = useLibraryStore.getState();
+      const meta = store.texts.find((t) => t.id === id);
+      if (!meta) return;
+      // Attach the PLAIN TEXT projection — a structured payload is never
+      // sent to the model as manuscript prose.
+      const body = await store.loadTextContent(id);
+      const attachment: AttachedLibraryText = {
+        id: meta.id,
+        title: meta.title,
+        textType: meta.textType,
+        content: displayTextFromBody(body),
+      };
+      updateAttachmentsFor(threadId, (prev) =>
+        prev.some((a) => a.id === id) ? prev : [...prev, attachment],
+      );
+    },
+    [updateAttachmentsFor],
+  );
 
   // Consume the "Ask the chat" handoff from the library tab.
   useEffect(() => {
     if (!pendingAttachId) return;
     const id = pendingAttachId;
     clearPendingAttach();
-    void addAttachment(id);
+    void (async () => {
+      // The handoff must land even when the conversation list is still
+      // loading: resolve the current conversation first (loadThreads
+      // selects or creates one), then attach into it.
+      if (!useChatStore.getState().activeThreadId) {
+        await useChatStore.getState().loadThreads();
+      }
+      await addAttachment(id);
+    })();
   }, [pendingAttachId, clearPendingAttach, addAttachment]);
+
+  const removeAttachment = useCallback(
+    (id: string) => {
+      const threadId = useChatStore.getState().activeThreadId;
+      if (!threadId) return;
+      updateAttachmentsFor(threadId, (prev) =>
+        prev.filter((a) => a.id !== id),
+      );
+    },
+    [updateAttachmentsFor],
+  );
+
+  const removeFileAttachment = useCallback(
+    (name: string) => {
+      const threadId = useChatStore.getState().activeThreadId;
+      if (!threadId) return;
+      updateFileAttachmentsFor(threadId, (prev) =>
+        prev.filter((f) => f.name !== name),
+      );
+    },
+    [updateFileAttachmentsFor],
+  );
 
   const handleAttachmentsConfirmed = useCallback(
     (ids: string[]) => {
+      const threadId = useChatStore.getState().activeThreadId;
+      if (!threadId) return;
       for (const id of ids) void addAttachment(id);
-      // Also drop attachments the user unchecked in the picker.
-      setAttachments((prev) => prev.filter((a) => ids.includes(a.id)));
+      // Also drop attachments the user unchecked in the picker. The write
+      // is functional: it cannot clobber the adds in flight.
+      updateAttachmentsFor(threadId, (prev) =>
+        prev.filter((a) => ids.includes(a.id)),
+      );
     },
-    [addAttachment],
+    [addAttachment, updateAttachmentsFor],
   );
 
   // ── File uploads: extract text, keep it for the next send ──
-  const handleUploadFiles = useCallback(async (files: FileList) => {
-    setUploadingFiles(true);
-    for (const file of Array.from(files)) {
-      try {
-        const parsed = await parseFile(file);
-        setFileAttachments((prev) =>
-          prev.some((f) => f.name === parsed.name)
-            ? prev
-            : [
-                ...prev,
-                {
-                  name: parsed.name,
-                  kind: parsed.kind,
-                  content: parsed.content,
-                  wordCount: parsed.wordCount,
-                },
-              ],
-        );
-        // Empty scans and truncation are reported explicitly, not silently
-        // attached as if they carried content.
-        if (parsed.warning) {
-          setError(`${file.name}: ${parsed.warning}`);
+  const handleUploadFiles = useCallback(
+    async (files: FileList) => {
+      const threadId = useChatStore.getState().activeThreadId;
+      if (!threadId) return;
+      setUploadingFiles(true);
+      for (const file of Array.from(files)) {
+        try {
+          const parsed = await parseFile(file);
+          const attachment: FileAttachment = {
+            name: parsed.name,
+            kind: parsed.kind,
+            content: parsed.content,
+            wordCount: parsed.wordCount,
+          };
+          updateFileAttachmentsFor(threadId, (prev) =>
+            prev.some((f) => f.name === parsed.name)
+              ? prev
+              : [...prev, attachment],
+          );
+          // Empty scans and truncation are reported explicitly, not silently
+          // attached as if they carried content.
+          if (parsed.warning) {
+            setError(`${file.name}: ${parsed.warning}`);
+          }
+        } catch (err) {
+          setError(
+            err instanceof Error
+              ? `Could not read ${file.name}: ${err.message}`
+              : `Could not read ${file.name}.`,
+          );
         }
-      } catch (err) {
-        setError(
-          err instanceof Error
-            ? `Could not read ${file.name}: ${err.message}`
-            : `Could not read ${file.name}.`,
-        );
       }
-    }
-    setUploadingFiles(false);
-  }, [setError]);
+      setUploadingFiles(false);
+    },
+    [setError, updateFileAttachmentsFor],
+  );
 
   // Sources in scope for this conversation (project-linked when the
   // thread has a project; standalone sources otherwise), with their
@@ -1047,14 +1097,10 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
             disabled={isSending}
             attachedTexts={attachments}
             onOpenPicker={() => setPickerOpen(true)}
-            onRemoveAttachment={(id) =>
-              setAttachments((prev) => prev.filter((a) => a.id !== id))
-            }
+            onRemoveAttachment={removeAttachment}
             fileAttachments={fileAttachments}
             onUploadFiles={(files) => void handleUploadFiles(files)}
-            onRemoveFileAttachment={(name) =>
-              setFileAttachments((prev) => prev.filter((f) => f.name !== name))
-            }
+            onRemoveFileAttachment={removeFileAttachment}
             uploadingFiles={uploadingFiles}
             projectTitle={
               !isProjectThread && threadProject ? threadProject.title : null

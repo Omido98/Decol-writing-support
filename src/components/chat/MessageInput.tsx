@@ -293,8 +293,8 @@ export default function MessageInput({
             size="icon"
             onClick={onOpenPicker}
             disabled={disabled}
-            title="Attach library texts"
-            aria-label="Attach library texts"
+            title="Attach a library document"
+            aria-label="Attach a library document"
             className="shrink-0"
           >
             <BookMarked className="size-4 text-text-secondary" />
