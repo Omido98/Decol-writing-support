@@ -54,6 +54,8 @@ import {
   Trash2,
 } from "lucide-react";
 import BriefForm from "@/components/chat/BriefForm";
+import FirstMessageAttachments from "@/components/chat/FirstMessageAttachments";
+import AgentToggles from "@/components/chat/AgentToggles";
 import RenameThreadDialog from "@/components/chat/RenameThreadDialog";
 
 interface ChatTabProps {
@@ -998,6 +1000,23 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
                   conversation of this project.
                 </p>
               </div>
+              <AgentToggles
+                webSearchEnabled={webSearchOn}
+                deepResearchEnabled={deepResearchOn}
+                onToggleWebSearch={handleToggleWebSearch}
+                onToggleDeepResearch={handleToggleDeepResearch}
+                disabled={isSending}
+              />
+              <FirstMessageAttachments
+                attachedTexts={attachments}
+                onOpenPicker={() => setPickerOpen(true)}
+                onRemoveAttachment={removeAttachment}
+                fileAttachments={fileAttachments}
+                onUploadFiles={(files) => void handleUploadFiles(files)}
+                onRemoveFileAttachment={removeFileAttachment}
+                uploadingFiles={uploadingFiles}
+                disabled={isSending}
+              />
               <Button
                 className="bg-primary hover:bg-primary/80 text-primary-foreground"
                 onClick={() => void handleProjectStart()}
@@ -1064,6 +1083,23 @@ export default function ChatTab({ onOpenSettings }: ChatTabProps) {
                   : ""}
               </p>
             </div>
+            <AgentToggles
+              webSearchEnabled={webSearchOn}
+              deepResearchEnabled={deepResearchOn}
+              onToggleWebSearch={handleToggleWebSearch}
+              onToggleDeepResearch={handleToggleDeepResearch}
+              disabled={isSending}
+            />
+            <FirstMessageAttachments
+              attachedTexts={attachments}
+              onOpenPicker={() => setPickerOpen(true)}
+              onRemoveAttachment={removeAttachment}
+              fileAttachments={fileAttachments}
+              onUploadFiles={(files) => void handleUploadFiles(files)}
+              onRemoveFileAttachment={removeFileAttachment}
+              uploadingFiles={uploadingFiles}
+              disabled={isSending}
+            />
             <BriefForm
               brief={brief ?? defaultBrief()}
               onChange={setBrief}

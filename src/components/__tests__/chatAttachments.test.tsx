@@ -47,7 +47,13 @@ vi.mock("@/utils/repository", async () => {
   return { repo: fakeRepository };
 });
 
+vi.mock("@/utils/api", () => ({
+  sendMessage: vi.fn(),
+  deslopText: vi.fn(),
+}));
+
 import { invoke } from "@tauri-apps/api/core";
+import { sendMessage } from "@/utils/api";
 import WorkspaceShell from "@/components/workspace/WorkspaceShell";
 import { useAppStore } from "@/stores/useAppStore";
 import { useLibraryStore } from "@/stores/libraryStore";
@@ -61,6 +67,7 @@ import { markdownDocument } from "@/utils/documentCodec";
 import type { LibraryTextMeta, ThreadMeta } from "@/types";
 
 const invokeMock = invoke as Mock;
+const sendMessageMock = sendMessage as unknown as Mock;
 
 // The workspace render plus real dialogs is heavy; under full-suite load the
 // default 5s per-test budget is too tight.
@@ -141,6 +148,7 @@ function checkboxFor(dialog: HTMLElement, title: string): HTMLElement {
 beforeEach(() => {
   prefsTable.clear();
   invokeMock.mockReset();
+  sendMessageMock.mockReset();
   invokeMock.mockImplementation(
     async (cmd: string, args: Record<string, unknown>) => {
       switch (cmd) {
@@ -274,5 +282,98 @@ describe("composer library attachments", () => {
 
     await screen.findByRole("button", { name: "Detach Field notes" });
     expect(useLibraryStore.getState().pendingAttachId).toBeNull();
+  });
+
+  it("attaches to the first message from the empty-thread start panel", async () => {
+    // A brand-new conversation: no messages yet, so the start panel (not
+    // the composer) is the only attach surface.
+    fakeRepoState.threads.set("th-a", {
+      meta: threadA,
+      briefJson: null,
+      messages: [],
+      rev: 0,
+    });
+    useChatStore.setState({ messages: [], threadAttachments: {} });
+    sendMessageMock.mockResolvedValue({ content: "reply", outcome: "complete" });
+
+    render(<WorkspaceShell />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Attach texts" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(checkboxFor(dialog, "Field notes"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Attach (1)" }));
+    await screen.findByRole("button", { name: "Detach Field notes" });
+    expect(
+      useChatStore.getState().getThreadAttachments("th-a").library.map((a) => a.id),
+    ).toEqual(["doc-a"]);
+
+    fireEvent.change(screen.getByPlaceholderText("What is the text about?"), {
+      target: { value: "Decolonial essay" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start discussion" }));
+
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1));
+    expect(sendMessageMock.mock.calls[0][2]).toContain("Field notes body");
+    await waitFor(() => expect(useChatStore.getState().messages).toHaveLength(2));
+    expect(useChatStore.getState().getThreadAttachments("th-a").library).toEqual([]);
+  });
+
+  it("sets web search and deep research for the first message from the start panel", async () => {
+    fakeRepoState.threads.set("th-a", {
+      meta: threadA,
+      briefJson: null,
+      messages: [],
+      rev: 0,
+    });
+    useChatStore.setState({ messages: [], threadAttachments: {} });
+    sendMessageMock.mockResolvedValue({ content: "reply", outcome: "complete" });
+
+    render(<WorkspaceShell />);
+
+    const web = await screen.findByRole("button", { name: /web search/i });
+    const deep = screen.getByRole("button", { name: /deep research/i });
+    expect(web.getAttribute("aria-pressed")).toBe("true");
+    expect(deep.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(web);
+    expect(useChatStore.getState().config.webSearchEnabled).toBe(false);
+    fireEvent.click(web);
+    expect(useChatStore.getState().config.webSearchEnabled).toBe(true);
+
+    fireEvent.click(deep);
+    expect(useChatStore.getState().config.deepResearchEnabled).toBe(true);
+    expect(useChatStore.getState().config.webSearchEnabled).toBe(true);
+
+    fireEvent.change(screen.getByPlaceholderText("What is the text about?"), {
+      target: { value: "Decolonial essay" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start discussion" }));
+
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1));
+    expect(sendMessageMock.mock.calls[0][1]).toMatchObject({
+      webSearchEnabled: true,
+      deepResearchEnabled: true,
+    });
+  });
+
+  it("shows the agent toggles in the project-brief start panel too", async () => {
+    const projectThread = { ...threadA, mode: "project" as const };
+    fakeRepoState.threads.set("th-a", {
+      meta: projectThread,
+      briefJson: null,
+      messages: [],
+      rev: 0,
+    });
+    useChatStore.setState({
+      threads: [projectThread],
+      messages: [],
+      threadAttachments: {},
+    });
+
+    render(<WorkspaceShell />);
+
+    await screen.findByText(/brief agent will ask about the project/i);
+    expect(screen.getByRole("button", { name: /web search/i })).toBeDefined();
+    expect(screen.getByRole("button", { name: /deep research/i })).toBeDefined();
   });
 });
