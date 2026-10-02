@@ -4,11 +4,17 @@ import type { ProviderId } from "@/utils/providers";
 /**
  * OS keychain integration for provider credentials.
  *
- * Each credential is keyed by provider + normalized endpoint identity, so
- * switching providers selects THAT profile's credential (or nothing) — one
- * profile's key can never be sent to another profile's endpoint. The
- * Rust backend (keyring_get/set/delete) stores secrets in the system
- * keychain (Windows Credential Manager / macOS Keychain / libsecret).
+ * Each NAMED PROFILE owns one credential, stored under that profile's own
+ * account (`dws-key:profile:<id>`), so several keys can coexist for one
+ * provider and switching profiles selects THAT profile's key (or nothing) —
+ * one profile's key can never be sent to another profile's endpoint. The
+ * Rust backend (keyring_get/set/delete) stores secrets in the system keychain
+ * (Windows Credential Manager / macOS Keychain / libsecret).
+ *
+ * The older provider+endpoint account scheme (`dws-key:<provider>:<url>`) is
+ * retained for MIGRATION ONLY: a pre-profiles install's key is moved into
+ * the seeded profile's account, and it stays the resolution path for a
+ * session in which that verified move failed.
  *
  * Writes are verified with a read-back before callers may act as if the
  * credential were stored; when the keychain is unavailable, callers fall
@@ -90,16 +96,12 @@ async function keyringDelete(account: string): Promise<boolean> {
 }
 
 /**
- * Store a credential AND verify the read-back. Returns false (and removes
- * the half-written entry) when the keychain could not store or read the
- * value — callers must then keep the credential session-only.
+ * The shared verified write behind every credential save: store AND verify
+ * the read-back. Returns false (and removes the half-written entry) when the
+ * keychain could not store or read the value — callers must then keep the
+ * credential session-only.
  */
-export async function saveCredential(
-  provider: ProviderId,
-  baseUrl: string,
-  value: string,
-): Promise<boolean> {
-  const account = credentialAccount(provider, baseUrl);
+async function saveVerified(account: string, value: string): Promise<boolean> {
   if (!(await keyringSet(account, value))) return false;
   const readBack = await keyringGet(account);
   if (readBack !== value) {
@@ -107,6 +109,28 @@ export async function saveCredential(
     return false;
   }
   return true;
+}
+
+/** Store a PROFILE's credential under its own account, verified. */
+export async function saveProfileCredential(
+  account: string,
+  value: string,
+): Promise<boolean> {
+  return saveVerified(account, value);
+}
+
+/** Read one profile's stored credential (its account is its identity). */
+export async function loadProfileCredential(
+  account: string,
+): Promise<string | null> {
+  return keyringGet(account);
+}
+
+/** Delete one profile's stored credential. */
+export async function deleteProfileCredential(
+  account: string,
+): Promise<boolean> {
+  return keyringDelete(account);
 }
 
 /**
@@ -128,7 +152,7 @@ export async function loadCredential(
   if (legacyAccount === account) return null;
   const legacy = await keyringGet(legacyAccount);
   if (legacy == null) return null;
-  const stored = await saveCredential(provider, baseUrl, legacy);
+  const stored = await saveVerified(account, legacy);
   if (stored) await keyringDelete(legacyAccount);
   return legacy;
 }

@@ -1,6 +1,6 @@
 [package]
 name = "decol-writing-support"
-version = "0.1.10"
+version = "0.1.11"
 description = "Decol Writing Support - write essays, articles and academic texts with a decolonial and anti-colonial perspective, with an AI chat assistant"
 authors = ["Omido98"]
 edition = "2021"
@@ -31,7 +31,10 @@ scraper = "0.27"
 ego-tree = "0.11"
 # Native credential stores must be enabled explicitly; without a matching
 # feature the keyring crate silently uses its non-persisting mock store.
-keyring = { version = "3", features = ["windows-native", "apple-native"] }
+# `sync-secret-service` is the Linux store (gnome-keyring / KWallet, both
+# present on the desktops we target); `crypto-rust` encrypts the D-Bus
+# transfer without pulling in OpenSSL.
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service", "crypto-rust"] }
 futures-util = "0.3"
 tokio-util = "0.7"
 tokio = { version = "1", features = ["macros"] }

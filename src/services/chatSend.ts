@@ -16,7 +16,8 @@ import {
   type ChatOperationKind,
   type PreparedChatRequest,
 } from "@/services/chatPrepare";
-import { loadCredential } from "@/utils/keychain";
+import { loadCredential, loadProfileCredential } from "@/utils/keychain";
+import { profileAccount } from "@/utils/profiles";
 import { recordMark, measureTtft, recordCancelLatency } from "@/utils/perfLog";
 import type { IncompleteReason } from "@/types";
 import type { ChatMessage, FileAttachment } from "@/stores/chatStore";
@@ -51,11 +52,12 @@ const preparingThreads = new Set<string>();
 
 /**
  * F07: a retained failure never holds a raw credential. Retry re-resolves
- * it from the profile's keychain account (the config carries provider +
- * endpoint, which is the account identity); when it cannot be resolved —
- * the key was forgotten, the credential was session-only, or the keychain
- * is unavailable — the retry fails visibly instead of sending
- * unauthenticated.
+ * it from the profile's keychain account (the request snapshot carries the
+ * profile id, which IS the account identity); a snapshot from before named
+ * profiles existed falls back to the older provider + endpoint account. When
+ * it cannot be resolved — the profile was deleted, the credential was
+ * session-only, or the keychain is unavailable — the retry fails visibly
+ * instead of sending unauthenticated.
  */
 async function resolveRetainedCredential(
   record: FailedSendRecord,
@@ -64,7 +66,9 @@ async function resolveRetainedCredential(
   if (config.apiKey) return record.request; // defensive: legacy record
   let key: string | null = null;
   try {
-    key = await loadCredential(config.provider, config.baseUrl);
+    key = config.activeProfileId
+      ? await loadProfileCredential(profileAccount(config.activeProfileId))
+      : await loadCredential(config.provider, config.baseUrl);
   } catch {
     key = null;
   }

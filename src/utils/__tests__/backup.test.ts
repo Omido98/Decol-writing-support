@@ -102,6 +102,68 @@ describe("backup export (browser)", () => {
     expect(config?.apiKey).toBe("");
   });
 
+  it("exports profile records without any key material (B23)", async () => {
+    localStorage.setItem(
+      "dws:pref:credential-profiles",
+      JSON.stringify([
+        {
+          id: "p1",
+          name: "Personal",
+          provider: "zen",
+          baseUrl: "https://opencode.ai/zen/v1",
+          account: "dws-key:profile:p1",
+          lastModel: "m",
+          lastUsedAt: 7,
+          apiKey: "sekrit", // a smuggled key must not survive the export
+        },
+      ]),
+    );
+    const bundle = await buildBackupBundle();
+    const profiles = bundle.preferences?.["credential-profiles"] as Record<
+      string,
+      unknown
+    >[];
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0].name).toBe("Personal");
+    expect(profiles[0].account).toBe("dws-key:profile:p1");
+    expect(profiles[0].apiKey).toBeUndefined();
+    expect(JSON.stringify(bundle)).not.toContain("sekrit");
+  });
+
+  it("rejects a bundle whose profile record carries a key", () => {
+    const base = {
+      format: "decol-writing-support-backup",
+      version: 3,
+      exportedAt: new Date().toISOString(),
+      data: JSON.parse(
+        JSON.stringify({
+          texts: [],
+          textContents: [],
+          projects: [],
+          threads: [],
+          messages: [],
+          sources: [],
+          sourcePassages: [],
+          files: [],
+        }),
+      ),
+    };
+    const withProfile = (profile: unknown) =>
+      JSON.stringify({
+        ...base,
+        preferences: { "credential-profiles": [profile] },
+      });
+    const ok = { id: "p1", name: "P", provider: "zen", baseUrl: "https://x.dev/v1" };
+    expect(parseBackupBundle(withProfile(ok))).not.toBeNull();
+    expect(parseBackupBundle(withProfile({ ...ok, apiKey: "sekrit" }))).toBeNull();
+    expect(parseBackupBundle(withProfile("not an object"))).toBeNull();
+    expect(
+      parseBackupBundle(
+        JSON.stringify({ ...base, preferences: { "credential-profiles": {} } }),
+      ),
+    ).toBeNull();
+  });
+
   it("exports the canonical dataset: sources, proposals, passages, drafts (B21d)", async () => {
     await repo.textCreate(meta, md("v1"));
     await repo.projectCreate({ id: "p1", title: "P", createdAt: "c", updatedAt: "u" });

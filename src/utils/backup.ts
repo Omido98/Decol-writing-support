@@ -23,6 +23,7 @@ import {
   bumpDatasetGeneration,
 } from "@/utils/datasetGeneration";
 import { CONTENT_SCHEMA_VERSION } from "@/utils/documentCodec";
+import { PROFILES_PREF } from "@/utils/profiles";
 
 // The reactive dataset generation lives in its own module (mounted views
 // subscribe to it); re-exported here for existing callers/tests.
@@ -281,6 +282,42 @@ function withoutSecrets(pref: unknown): unknown {
   return pref;
 }
 
+/** The fields a credential-profile record may carry: an allow-list, so no
+ * extra property (a key) can ride along in either direction. */
+const PROFILE_FIELDS = [
+  "id",
+  "name",
+  "provider",
+  "baseUrl",
+  "account",
+  "lastModel",
+  "lastUsedAt",
+] as const;
+
+function pickProfileFields(entry: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const field of PROFILE_FIELDS) {
+    if (field in entry) out[field] = entry[field];
+  }
+  return out;
+}
+
+/**
+ * Every preference of the bundle, credential-free: the config's `apiKey` is
+ * blanked and the profile list is reduced to its allow-listed, non-secret
+ * fields (a profile record is a reference to a keychain account, not a key).
+ */
+function withoutSecretsIn(key: string, value: unknown): unknown {
+  if (key === PROFILES_PREF && Array.isArray(value)) {
+    return value
+      .filter((entry): entry is Record<string, unknown> =>
+        Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
+      )
+      .map(pickProfileFields);
+  }
+  return withoutSecrets(value);
+}
+
 /**
  * The canonical v3 envelope of the CURRENT dataset: the validated dump
  * from the active backend plus the full credential-free preferences
@@ -297,7 +334,7 @@ async function exportCanonicalBundle(
   if (!dump) throw abort(error ?? "unknown validation error");
   const preferences: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(await getAllPrefs())) {
-    preferences[key] = withoutSecrets(value);
+    preferences[key] = withoutSecretsIn(key, value);
   }
   return {
     format: BACKUP_FORMAT,
@@ -928,6 +965,18 @@ export function parseBackupBundle(raw: string): BackupBundle | null {
       const config = preferences["config"] as Record<string, unknown> | undefined;
       if (config && typeof config === "object" && !Array.isArray(config) && config.apiKey) {
         return null;
+      }
+      // A profile record may only carry its allow-listed fields; anything
+      // else (a key smuggled into a profile) rejects the bundle outright.
+      const profiles = preferences[PROFILES_PREF];
+      if (profiles != null) {
+        if (!Array.isArray(profiles)) return null;
+        for (const entry of profiles) {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+          if (Object.keys(entry).some((field) => !PROFILE_FIELDS.includes(field as never))) {
+            return null;
+          }
+        }
       }
       return {
         format: BACKUP_FORMAT,

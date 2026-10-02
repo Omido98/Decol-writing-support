@@ -4483,3 +4483,270 @@ palette matching, RIS literal-org round-trip, locale case folding, drawer
 focus trap, startup spinner, recovery-snapshot UI link, bulk-export
 failure polish, browser v1 legacy restore, snapshot pruning, per-message
 search hits, CSS polish) is untouched by design.
+
+---
+
+## B-series repair programme (continued) - B23
+
+### B23 - Named credential profiles and a cross-profile model picker
+
+The gap this batch closes: a credential's identity was the `provider +
+endpoint` pair, so exactly one key was ever loaded and the model picker
+listed exactly one profile's models. Users with two accounts on the SAME
+provider (personal and work) could not keep both, and no view showed the
+models available across everything they had saved.
+
+#### The unit is now a named profile
+
+`src/utils/profiles.ts` (new) owns the `CredentialProfile` record: a stable
+`id` (also its keychain account), the user's `name`, the `provider` and
+`baseUrl` it points at, the `account` REFERENCE, plus `lastModel` and
+`lastUsedAt`. Several profiles may share a provider and an endpoint - that is
+the point.
+
+Secrets stay in the OS keychain under `dws-key:profile:<id>`
+(`keychain.saveProfileCredential` / `loadProfileCredential` /
+`deleteProfileCredential`, all built on the existing verified
+write-then-read-back helper). The list itself lives in the
+`credential-profiles` preference and holds references only.
+
+`ApiConfig` keeps `provider`/`baseUrl`/`apiKey`/`model` and is now a
+FLATTENED VIEW of the active profile (`chatStore.flattenProfile`), plus
+`activeProfileId`. That is why no send path changed: `utils/api.ts`,
+`aiOperations`, `ChatTab`'s no-key gate, `EvalReportView` and
+`WhatWillBeSent` all keep reading the same fields and simply always describe
+whichever profile is active.
+
+#### One canonical writer per concern
+
+- `setConfig` lost its credential branch entirely. Its parameter type is
+  now `ConfigFields`, which OMITS `apiKey`, `keychainAccount`,
+  `sessionKeyOnly`, `activeProfileId`, `provider` and `baseUrl`: a plain
+  merge structurally cannot attach a key or switch connections.
+- `saveConnection({profileId?, name, provider, baseUrl, apiKey, model?})` is
+  the ONLY credential write. It upserts a profile, verifies the key into that
+  profile's account, stamps `lastModel`/`lastUsedAt` and activates it.
+- `activateProfile(id, model?)`, `renameProfile`, `deleteProfile`,
+  `forgetProfileKey` (and `forgetCredential` as "forget the active one").
+
+Rules the store enforces:
+- **A key never follows a profile to another endpoint.** If the caller
+  changed the provider/endpoint of an existing profile, the connection is
+  stored as a NEW, auto-named profile and the old one keeps its key. The
+  settings form says so inline before the save.
+- **An empty `apiKey` on an existing profile keeps the stored key.**
+  Deleting a key is the explicit `Forget saved key` / `Forget key` action.
+- A typed duplicate name is refused (`duplicate-name`); an auto-generated
+  name is made unique instead (`OpenCode Zen 2`).
+- **The last profile cannot be deleted** - an app with no key is not a state
+  the user can recover from inside the app.
+- Only the ACTIVE profile's secret is ever in memory. Every other profile is
+  read by Rust on request.
+
+#### Non-active keys never enter the webview
+
+The union model list needs every profile's `/models`. Rather than pulling N
+keys into JS, `zen_list_models_for_account(account, base_url, provider)` takes
+only the account REFERENCE and reads the keychain itself
+(`lib.rs::read_keychain_secret`, sharing `fetch_models` with
+`zen_list_models`); a missing entry is a distinct, reportable error. The
+masked tail shown in the manager comes from `keyring_hint`, which computes
+`…f2a1` in Rust and never returns the secret. The ACTIVE profile is the one
+exception: it is fetched with the in-memory key, because that key may be a
+freshly typed or session-only one that exists nowhere else.
+
+`services/chatSend.ts` re-resolves a retried send by `activeProfileId`
+(F07), falling back to the old provider+endpoint lookup for records written
+before this batch.
+
+#### Migration
+
+`loadConfig` seeds profile #1 from a pre-profiles config and MOVES its
+credential: read the endpoint-keyed account (which also migrates a PRE-B17b
+all-lowercase account forward), verified-write it to the profile's account,
+delete the old copy second. If that write fails, the profile KEEPS the old
+account - recoverability first, the key is still usable that session. The
+pre-R7 shared `api_key` entry and the plaintext `config.json` key follow the
+same verified-write-then-delete order, and the provenance gate is unchanged
+(a persisted account reference pointing at another profile blocks the legacy
+claim). A fresh install gets one keyless profile named after its provider.
+
+`sanitizeProfiles` repairs a hand-edited list on load: unrepairable records
+are dropped, and only the allow-listed fields are kept, so a key smuggled
+into a profile record cannot reach the app.
+
+#### UI
+
+- **Saved keys** (`ProfileManager.tsx`, mounted in `SettingsDialog` above API
+  configuration): one row per profile with name, provider, endpoint, the
+  masked key tail, an Active badge, and Use / Test / Rename / Forget key /
+  Delete. "Add profile" takes name, provider, URL and key; a pasted key
+  adopts its detected provider's default URL. Newest first.
+- **Model** (`ModelPicker.tsx`): the list is now the UNION over profiles,
+  grouped by profile with the profile name and provider as the group label.
+  A row's value is `<profileId>::<modelId>`, so the same model id on two
+  accounts stays two rows (a profile id is a uuid and never contains `:`, so
+  the first `::` is unambiguous). Free/price/Removed badges are resolved
+  against each row's OWN provider, not a form-wide one. Picking a row from
+  another profile activates that profile and re-aims the form - the user
+  picks the model and the key in one place. Fetches run at most four at a
+  time, publish per-profile results as they land, and report each profile's
+  own status ("42 models available." / "HTTP 401" / "No stored API key for
+  this profile."). Zen pricing is fetched once for all Zen profiles (it takes
+  no key) with the cached table as fallback. The paid-model confirmation now
+  names the account that will be billed.
+- `buildModelGroups` (exported, pure) is the grouping contract: one group
+  per profile in profile order, a profile's own selection pinned into its own
+  group, Zen rows free-first with removed ones last, and no evidence of
+  removal means no removal.
+- `ApiConfigForm` edits the ACTIVE profile: the provider/endpoint/key fields
+  are re-aimed by an effect whenever the active profile changes, and the
+  credential-ownership invariant (B17b) is preserved with the profile id in
+  the key: `${profileId}|${provider}|${normalizedEndpoint}`. An endpoint edit
+  still clears the field SYNCHRONOUSLY, so no click can send a key to an
+  endpoint it was not typed for.
+
+#### Backups
+
+Profile records are exported through an allow-list
+(`PROFILE_FIELDS`) and the v3 import parser REJECTS a bundle whose profile
+record carries any other property. `BACKUP_VERSION` stays 3: profiles are a
+separate preference, so an older build simply ignores them.
+
+#### Verification
+
+Commands run and results:
+- `npx tsc --noEmit` - OK.
+- `npm test` - 660 passed (64 files). Baseline before B23: 645.
+- `npm run build` - OK (pre-existing chunk-size warning).
+- `cargo test --lib` - 106 passed, 1 ignored (fixture generator).
+- `cargo check` - OK.
+
+New/updated tests:
+- `src/stores/__tests__/credentialIsolation.test.ts` (30 tests, was 18):
+  several keys for one provider in separate profiles; activation loads that
+  profile's own key; the active profile and each profile's model survive a
+  restart; a moved endpoint becomes a new profile; a keyless new connection
+  is refused; create/rename/delete with the last-profile rule; the
+  hand-edited-list repair; and the whole migration set re-pointed at profile
+  accounts, including the failed-move recoverability case.
+- `src/components/__tests__/apiConfigCredentials.test.tsx` (7 tests, was 4):
+  the B17b transitions re-expressed over profiles, plus a test that the
+  active profile is fetched with its own key while every other profile is
+  addressed only by account, per-profile status lines, and a profile switch
+  re-aiming the form.
+- `src/components/__tests__/modelPickerGroups.test.ts` (new, 10 tests): the
+  selection-value round trip, the same model id on two profiles, the pinned
+  selection, Zen ordering, and the no-evidence rule.
+- `src/utils/__tests__/backup.test.ts`: profile export without key material,
+  and bundle rejection for a profile record carrying a key.
+
+Not done / carried forward: the GUI itself is not covered by the automated
+gates, so the E2E checklist in `docs/PROJECT-STATE.md` still applies - in
+particular adding two profiles for one provider, activating each, and
+verifying a send. A profile whose key is session-only cannot contribute
+models after a restart (its key was never stored anywhere) and says so.
+Nothing was committed, pushed, version-bumped, or released.
+---
+
+### B24 - Linux x86-64 (AppImage) builds and a persistent Linux keyring
+
+#### The gap
+
+Every published release shipped Windows and macOS installers only. A Linux
+x86-64 machine could not run the app at all: there is no `.AppImage`, `.deb`
+or `.rpm` asset, and the existing `.exe`/`.dmg` files are platform binaries.
+
+#### The blocker that was not visible from the workflow
+
+`.github/workflows/pr-verify.yml` already compiled the whole crate on
+`ubuntu-latest`, so the Rust side was Linux-ready. What it did NOT prove is
+that credentials would survive a restart: `src-tauri/Cargo.toml` enabled only
+the keyring crate's `windows-native` and `apple-native` features, and that
+crate **silently falls back to a non-persisting mock store** when no feature
+matches the target platform. A Linux build made without this fix would have
+installed cleanly and then quietly forgotten every API key on exit - the
+credential-profile feature (B23) would have been dead on arrival.
+
+Fixed by adding the Linux store to the same feature list:
+
+```toml
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service", "crypto-rust"] }
+```
+
+`sync-secret-service` is the D-Bus Secret Service (GNOME Keyring / KWallet -
+the default on GNOME, Cinnamon and KDE desktops). `crypto-rust` encrypts the
+D-Bus transfer in pure Rust, so no OpenSSL dependency is added. The features
+are additive: the crate resolves the store per target platform, so the
+Windows Credential Manager and macOS Keychain paths are unchanged (verified:
+`cargo check` and `cargo test --lib` still green on Windows).
+
+#### The release matrix
+
+`.github/workflows/release.yml` gains one row:
+
+```yaml
+- platform: ubuntu-24.04
+  args: "--bundles appimage"
+  name: linux-x64
+```
+
+The runner image is PINNED, and that is the load-bearing decision:
+
+- `ubuntu-latest` switches to Ubuntu 26.04 in November 2026 (glibc 2.41+),
+  which would raise the floor above what Linux Mint 22.x provides
+  (Ubuntu 24.04 base, glibc 2.39) and silently produce an AppImage the
+  target machine cannot run.
+- `ubuntu-22.04`, which the Tauri documentation's own example still uses, has
+  been deprecated on GitHub since 17 September 2026 and is removed on
+  17 April 2027.
+
+`ubuntu-24.04` matches Mint 22.x exactly, so no container and no cross-build
+is needed. A Linux-only apt step installs the Tauri prerequisites plus
+`libdbus-1-dev`, which the Secret Service client links against.
+`tauri.conf.json` keeps `"targets": "all"`; the `--bundles appimage` flag
+narrows the job the same way the existing `windows-arm64` row narrows itself
+with `--bundles nsis`. `pr-verify.yml` also gains `libdbus-1-dev`, so PR CI
+fails loudly the day the keyring feature is missing, instead of at release
+time.
+
+AppImage is the only Linux format shipped: it needs no package manager and no
+root, which is the point for a friend installing this on their own machine.
+It participates in the auto-updater like every other artifact (the updater
+plugin has supported AppImage since 2.10), with the practical caveat that it
+replaces the file in place, so it must live in a writable location.
+
+#### Known limitations
+
+- **The AppImage does not bundle WebKitGTK.** The host must provide
+  `webkit2gtk-4.1`, which Tauri 2 requires anyway; every supported distro has
+  it, and Mint 22.x does.
+- **AppImage bundling in CI is the least reliable of the four jobs.**
+  linuxdeploy runs without FUSE in containers and has open upstream issues;
+  the new libdbus dependency also gives its `strip` step one more library to
+  choke on. If the Linux job fails, the fallback is one flag
+  (`--bundles appimage,deb`); a `.deb` builds with pure Rust and installs on
+  Mint by double-click.
+- **`.deb` and `.rpm` are not built**, so there is no package-manager install
+  path and no AUR/Debian repo entry yet.
+- Saved keys need a running Secret Service daemon. A headless or minimal
+  session without one still runs the app but falls back to session-only keys,
+  which the UI reports explicitly.
+- Nothing on the GUI is covered by the automated gates: the AppImage itself
+  was verified by building it in CI and inspecting the artifact, not by
+  running it on a Linux desktop.
+
+#### Verification
+
+- `npx tsc --noEmit` - OK.
+- `npm test` - 660 passed (64 files).
+- `cargo test --lib` - 106 passed, 1 ignored (fixture generator).
+- `cargo check` (Windows, with the Linux keyring feature enabled) - OK.
+- `npm run build` - OK (pre-existing chunk-size warning).
+
+Docs updated: `AGENTS.md` and `.opencode/skills/release-process/SKILL.md`
+(four platform installers, not three); `docs/installing-on-work-laptops.md`
+gains a Linux section (AppImage launch steps, in-place updates, keyring
+behaviour, distro requirements) and had its stale release URL and macOS
+asset name corrected - they still pointed at the project's former repository
+name.

@@ -26,6 +26,7 @@ const baseConfig: ApiConfig = {
   lastBrief: null,
   keychainAccount: "dws-key:zen:https://opencode.ai/zen/v1",
   sessionKeyOnly: false,
+  activeProfileId: "p1",
 };
 
 const deepConfig: ApiConfig = {
