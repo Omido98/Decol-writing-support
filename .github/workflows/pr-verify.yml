@@ -12,7 +12,8 @@ jobs:
 
       # Tauri 2's Linux build (gtk/webkit2gtk) needs system development
       # libraries; ubuntu-latest does not ship them. Without this the
-      # cargo steps fail before any test runs.
+      # cargo steps fail before any test runs. `libdbus-1-dev` is the
+      # Secret Service client the keyring crate links on Linux (B24).
       - name: Tauri Linux prerequisites
         run: |
           sudo apt-get update
@@ -23,6 +24,7 @@ jobs:
             libxdo-dev \
             libssl-dev \
             libgtk-3-dev \
+            libdbus-1-dev \
             patchelf
 
       - name: Node 24

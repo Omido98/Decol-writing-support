@@ -30,6 +30,7 @@ import {
 import { repo } from "@/utils/repository";
 import { flushComposerAttachments } from "@/stores/chatStore";
 import ApiConfigForm from "./ApiConfigForm";
+import ProfileManager from "./ProfileManager";
 import EvalReportView from "@/components/settings/EvalReportView";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -414,6 +415,12 @@ export default function SettingsDialog({
             {backupStatus && (
               <p className="text-xs text-text-muted">{backupStatus}</p>
             )}
+          </div>
+
+          {/* Saved keys (named credential profiles) */}
+          <div className="space-y-2">
+            <Label className="text-text-secondary text-xs">Saved keys</Label>
+            <ProfileManager />
           </div>
 
           {/* API configuration */}

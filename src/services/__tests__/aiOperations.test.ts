@@ -36,6 +36,7 @@ const config: ApiConfig = {
   lastBrief: null,
   keychainAccount: null,
   sessionKeyOnly: false,
+  activeProfileId: "p1",
 };
 
 const history = [

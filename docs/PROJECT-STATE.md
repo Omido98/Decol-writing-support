@@ -6,12 +6,12 @@ per-batch history is `docs/IMPLEMENTATION-PROGRESS.md`.
 
 ## Verified state at programme close
 
-Last full run (F13 batch, 2026-09-16), all green:
+Last full run (B23 batch), all green:
 
 - `npx tsc --noEmit` — OK.
-- `npm test` — 593 passed (54 files).
+- `npm test` — 660 passed (64 files).
 - `npm run build` — OK (pre-existing chunk-size warning only).
-- `cargo test --lib` (from `src-tauri`) — 97 passed, 1 ignored (fixture
+- `cargo test --lib` (from `src-tauri`) — 106 passed, 1 ignored (fixture
   generator).
 - `cargo check` — OK.
 
@@ -26,6 +26,32 @@ Data contracts:
   changes only together with an intentional format version bump, and is
   regenerated from `src-tauri` with
   `cargo test --lib regenerate_backup_contract_fixture -- --ignored`.
+- Release platforms: **windows-x64, windows-arm64, macos-arm64, linux-x64
+  (AppImage)**. The Linux job is pinned to `ubuntu-24.04` on purpose -
+  `ubuntu-latest` moves to Ubuntu 26.04 in Nov 2026 and would raise the glibc
+  floor above Linux Mint 22.x.
+
+## Credentials (B23)
+
+- LLM keys live ONLY in the OS keychain, one entry per **named profile**,
+  under `dws-key:profile:<id>`. The `credential-profiles` preference holds
+  the name, provider, endpoint, that account reference, and the last model —
+  never a key. `ApiConfig` is the flattened view of the ACTIVE profile and
+  still carries `apiKey` in memory for the send path.
+- Settings has a **Saved keys** manager (add/rename/test/forget/delete,
+  several profiles per provider allowed) and a model picker that lists the
+  models of EVERY profile, grouped by profile; picking a row activates that
+  profile.
+- `saveConnection` is the only credential write path; `setConfig` cannot
+  carry a key or change the connection. A key never follows a profile to a
+  different endpoint (that becomes a new profile).
+- A pre-profiles install is migrated on first load: the endpoint-keyed
+  credential is moved into the seeded profile's account, verified write
+  first; a failed move keeps the profile pointed at the old account.
+- The keyring crate's feature list is what makes credentials persist, and it
+  must cover every shipped platform: `windows-native`, `apple-native`, and
+  `sync-secret-service` for Linux (B24). Removing the Linux entry silently
+  reverts that platform to a non-persisting mock store.
 
 ## End-to-end UI verification checklist
 

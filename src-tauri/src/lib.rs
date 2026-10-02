@@ -508,6 +508,31 @@ async fn zen_list_models(
     api_key: String,
     provider: String,
 ) -> Result<Vec<String>, String> {
+    fetch_models(&clients.chat, &base_url, &api_key, &provider).await
+}
+
+/// The same model list for a NON-active credential profile, with the key
+/// read from the system keychain HERE and never handed to the webview: the
+/// frontend passes only the account reference (which is not a secret), so a
+/// profile the user is not currently sending with cannot leak into JS.
+#[tauri::command]
+async fn zen_list_models_for_account(
+    clients: State<'_, HttpClients>,
+    account: String,
+    base_url: String,
+    provider: String,
+) -> Result<Vec<String>, String> {
+    let api_key = read_keychain_secret(&account)?;
+    fetch_models(&clients.chat, &base_url, &api_key, &provider).await
+}
+
+/// The one shared implementation behind both model-listing commands.
+async fn fetch_models(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    provider: &str,
+) -> Result<Vec<String>, String> {
     let base = base_url.trim_end_matches('/').to_string();
     let url = if provider == "anthropic" {
         anthropic_endpoint(&base, "/models")
@@ -515,14 +540,14 @@ async fn zen_list_models(
         format!("{base}/models")
     };
 
-    let mut request = clients.chat.get(&url);
+    let mut request = client.get(&url);
     if !api_key.is_empty() {
         request = if provider == "anthropic" {
             request
-                .header("x-api-key", &api_key)
+                .header("x-api-key", api_key)
                 .header("anthropic-version", "2023-06-01")
         } else {
-            request.bearer_auth(&api_key)
+            request.bearer_auth(api_key)
         };
     }
 
@@ -1770,6 +1795,41 @@ fn keyring_delete(key: String) -> Result<(), String> {
     }
 }
 
+/// The masked tail of a stored secret (e.g. `…f2a1`), so the UI can tell
+/// two saved profiles apart without the secret ever leaving Rust.
+/// Returns `null` when no entry exists.
+#[tauri::command]
+fn keyring_hint(key: String) -> Result<Option<String>, String> {
+    match keyring_get(key)? {
+        Some(secret) => {
+            let tail: Vec<char> = secret.chars().rev().take(4).collect();
+            let tail: String = tail.into_iter().rev().collect();
+            Ok(if tail.is_empty() {
+                None
+            } else {
+                Some(format!("…{tail}"))
+            })
+        }
+        None => Ok(None),
+    }
+}
+
+/// Read a secret for a backend-side use (a command that must not hand the
+/// secret to the webview). A missing entry is a distinct, reportable error:
+/// callers turn it into "this profile has no stored key" rather than into a
+/// blank Authorization header.
+fn read_keychain_secret(account: &str) -> Result<String, String> {
+    let entry =
+        Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| format!("Keychain unavailable: {e}"))?;
+    match entry.get_password() {
+        Ok(secret) => Ok(secret),
+        Err(keyring::Error::NoEntry) => {
+            Err("No stored API key for this profile.".to_string())
+        }
+        Err(e) => Err(format!("Keychain error: {e}")),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Shared across every command for connection/TLS/DNS reuse.
@@ -1785,6 +1845,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             zen_list_models,
+            zen_list_models_for_account,
             zen_chat,
             zen_chat_stream,
             zen_chat_stream_cancel,
@@ -1794,6 +1855,7 @@ pub fn run() {
             keyring_get,
             keyring_set,
             keyring_delete,
+            keyring_hint,
             repository::db_init,
             repository::db_texts_list,
             repository::db_text_create,

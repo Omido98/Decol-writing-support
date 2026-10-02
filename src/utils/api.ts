@@ -303,6 +303,44 @@ export async function listModels(
 }
 
 /**
+ * The model list of a NON-active credential profile. Only the profile's
+ * keychain ACCOUNT is sent; Rust reads the secret itself, so a key the user
+ * is not currently sending with never reaches the webview.
+ */
+export async function listModelsForAccount(
+  account: string,
+  baseUrl: string,
+  provider: ProviderId,
+): Promise<string[]> {
+  try {
+    return await invoke<string[]>("zen_list_models_for_account", {
+      account,
+      baseUrl,
+      provider,
+    });
+  } catch (err) {
+    throw new Error(
+      typeof err === "string" ? err : "Failed to load the model list.",
+    );
+  }
+}
+
+/**
+ * The masked tail of a stored credential (e.g. "…f2a1"), for telling two
+ * saved profiles apart. Computed in Rust: the secret is not returned.
+ * Null when the profile has no stored key.
+ */
+export async function credentialHint(
+  account: string,
+): Promise<string | null> {
+  try {
+    return (await invoke<string | null>("keyring_hint", { key: account })) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Fetch the current OpenCode Zen pricing table from the official docs page.
  * Runs through Rust so the webview never hits CORS restrictions.
  *
